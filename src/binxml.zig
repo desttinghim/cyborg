@@ -23,7 +23,15 @@ const Type = enum(u16) {
 const ResourceChunk = struct {
     type: Type,
     header_size: u16,
-    size: u16,
+    size: u32,
+
+    pub fn read(reader: anytype) !ResourceChunk {
+        return ResourceChunk{
+            .type = @intToEnum(Type, try reader.readInt(u16, .Little)),
+            .header_size = try reader.readInt(u16, .Little),
+            .size = try reader.readInt(u32, .Little),
+        };
+    }
 };
 
 const DataType = enum(u8) {
@@ -93,12 +101,27 @@ const StringPool = struct {
         header: ResourceChunk,
         string_count: u32,
         style_count: u32,
-        flags: packed struct(u32) {
-            sorted: bool,
-            utf8: bool,
-        },
+        flags: Flags,
         strings_start: u32,
         styles_start: u32,
+
+        const Flags =
+            packed struct(u32) {
+            sorted: bool,
+            utf8: bool,
+            _unused: u30 = 0,
+        };
+
+        fn read(reader: anytype) !Header {
+            return Header{
+                .header = try ResourceChunk.read(reader),
+                .string_count = try reader.readInt(u32, .Little),
+                .style_count = try reader.readInt(u32, .Little),
+                .flags = @bitCast(Flags, try reader.readInt(u32, .Little)),
+                .strings_start = try reader.readInt(u32, .Little),
+                .styles_start = try reader.readInt(u32, .Little),
+            };
+        }
     };
 
     const Span = struct {
@@ -294,18 +317,18 @@ pub fn readAlloc(file: std.fs.File, alloc: std.mem.Allocator) !Document {
 
     if (!std.mem.eql(u8, &signature, "\x03\x00\x08\x00")) return error.WrongMagicBytes;
 
-    var header: [8]u32 = undefined;
-    for (header) |*value| {
-        value.* = try reader.readInt(u32, .Little);
-        std.log.debug("{}", .{value.*});
-    }
+    _ = try reader.readInt(u32, .Little);
 
-    const string_table_end = header[2];
-    const string_table_count = header[3];
-    const string_table_offset = 0x24 + string_table_count * 4;
+    const string_pool = try StringPool.Header.read(reader);
+
+    std.log.debug("{any}", .{string_pool});
+
+    const string_table_end = string_pool.header.size;
+    const string_table_count = string_pool.string_count;
+    const string_table_offset = string_pool.header.header_size + string_table_count * 4;
 
     std.log.debug("string table @ {}-{}, {} entries", .{ string_table_offset, string_table_end, string_table_count });
-    // try file.seekTo(string_table_offset);
+
     const string_offsets = try alloc.alloc(u32, string_table_count);
     for (string_offsets) |*offset| {
         offset.* = try reader.readInt(u32, .Little);
