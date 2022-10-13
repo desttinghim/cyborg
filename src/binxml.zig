@@ -88,12 +88,14 @@ const Value = struct {
     data: u32,
 
     fn read(reader: anytype) !Value {
-        return Value{
+        var value = Value{
             .size = try reader.readInt(u16, .Little),
             .res0 = try reader.readInt(u8, .Little),
-            .datatype = @intToEnum(DataType, try reader.readInt(u16, .Little)),
+            .datatype = @intToEnum(DataType, try reader.readInt(u8, .Little)),
             .data = try reader.readInt(u32, .Little),
         };
+        // try reader.skipBytes(value.size - @sizeOf(Value), .{});
+        return value;
     }
 };
 
@@ -136,14 +138,17 @@ const StringPool = struct {
             };
         }
 
-        pub fn getAlloc(self: Header, alloc: std.mem.Allocator, file: std.fs.File, ref: Ref) ![]const u16 {
-            try file.seekTo(self.header.header_size + ref.index * 4);
+        pub fn getAlloc(self: Header, alloc: std.mem.Allocator, file: std.fs.File, ref: Ref) !?[]const u16 {
+            if (ref.index == std.math.maxInt(u32)) return null;
+            try file.seekTo(8 + self.header.header_size + ref.index * 4);
             const reader = file.reader();
             const offset = try reader.readInt(u32, .Little);
-            std.log.debug("{}, {}, {}", .{ ref.index, self.header.header_size, offset });
-            try file.seekTo(self.strings_start + offset * 2);
-            const length = try reader.readInt(u16, .Little);
-            std.log.debug("{}", .{length});
+            try file.seekTo(8 + self.strings_start + offset);
+            var length: u32 = try reader.readInt(u16, .Little);
+            if (length > 32767) {
+                length = (length & 0b0111_1111) << 16;
+                length += try reader.readInt(u16, .Little);
+            }
             const mem = try alloc.alloc(u16, length);
             for (mem) |*char| {
                 char.* = try reader.readInt(u16, .Little);
@@ -237,6 +242,7 @@ const XMLTree = struct {
         id_index: u16,
         class_index: u16,
         style_index: u16,
+        list: ?[]Attribute = null,
     };
 
     const Attribute = struct {
@@ -244,6 +250,15 @@ const XMLTree = struct {
         name: StringPool.Ref,
         raw_value: StringPool.Ref,
         typed_value: Value,
+
+        pub fn read(reader: anytype) !Attribute {
+            return Attribute{
+                .namespace = try StringPool.Ref.read(reader),
+                .name = try StringPool.Ref.read(reader),
+                .raw_value = try StringPool.Ref.read(reader),
+                .typed_value = try Value.read(reader),
+            };
+        }
     };
 };
 
@@ -406,10 +421,21 @@ pub fn readAlloc(file: std.fs.File, alloc: std.mem.Allocator) !Document {
             .StringPool => string_pool = try StringPool.Header.read(reader, header),
             .XmlResourceMap => resource_map = XMLTree.Header{ .header = header },
             .XmlStartNamespace,
-            .XmlStartElement,
             .XmlEndElement,
             .XmlEndNamespace,
             => try nodes.append(try XMLTree.Node.read(reader, header)),
+            .XmlStartElement => {
+                var node = try XMLTree.Node.read(reader, header);
+                var attribute = node.extended.Attribute;
+                if (attribute.count > 0) {
+                    var attrs = try alloc.alloc(XMLTree.Attribute, attribute.count);
+                    for (attrs) |*attr| {
+                        attr.* = try XMLTree.Attribute.read(reader);
+                    }
+                    node.extended.Attribute.list = attrs;
+                }
+                try nodes.append(node);
+            },
             else => break,
         }
         if (pos + header.size >= file_length) break;
