@@ -23,7 +23,12 @@ pub fn main() !void {
     try std.fmt.format(stdout, "{any}\n", .{end_record});
 
     var zip_dir = try end_record.parseDirectory(file, try alloc.alloc(zip.CentralDirectoryFileHeader, end_record.record_count));
-    for (zip_dir.directory_headers) |d| {
-        try std.fmt.format(stdout, "{any}\n", .{d});
+    for (zip_dir.directory_headers) |*zipfile| {
+        const buffer = try alloc.alloc(u8, zipfile.getVariableSize());
+        defer alloc.free(buffer);
+        var remaining = buffer[0..try zipfile.readName(file, buffer)];
+        remaining = remaining[0..try zipfile.readExtra(file, buffer)];
+        remaining = remaining[0..try zipfile.readComment(file, buffer)];
+        try std.fmt.format(stdout, "{s}\n", .{zipfile.filename.?});
     }
 }

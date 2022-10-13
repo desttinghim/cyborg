@@ -131,6 +131,7 @@ pub const InternalFileAttr = packed struct(u16) {
 
 pub const CentralDirectoryFileHeader = struct {
     const SIGNATURE = "PK\x01\x02";
+    pos: usize,
     signature: [4]u8,
     version_madeby: u16,
     version_needed: u16,
@@ -152,8 +153,9 @@ pub const CentralDirectoryFileHeader = struct {
     extra_field: ?[]u8,
     file_comment: ?[]u8,
 
-    pub fn parse(reader: anytype) !CentralDirectoryFileHeader {
+    pub fn parse(reader: anytype, pos: usize) !CentralDirectoryFileHeader {
         var file_header: CentralDirectoryFileHeader = undefined;
+        file_header.pos = pos;
         std.debug.assert(try reader.read(&file_header.signature) == 4);
         std.debug.assert(std.mem.eql(u8, SIGNATURE, &file_header.signature));
         file_header.version_madeby = try reader.readInt(u16, .Little);
@@ -168,6 +170,7 @@ pub const CentralDirectoryFileHeader = struct {
         file_header.filename_length = try reader.readInt(u16, .Little);
         file_header.extra_field_length = try reader.readInt(u16, .Little);
         file_header.file_comment_length = try reader.readInt(u16, .Little);
+        file_header.disk_number = try reader.readInt(u16, .Little);
         file_header.internal_file_attr = try InternalFileAttr.parse(reader);
         file_header.external_file_attr = try reader.readInt(u32, .Little);
         file_header.relative_offset = try reader.readInt(u32, .Little);
@@ -177,19 +180,26 @@ pub const CentralDirectoryFileHeader = struct {
         return file_header;
     }
 
-    pub fn parseName(file_header: *CentralDirectoryFileHeader, reader: anytype, buffer: []u8) !usize {
+    pub fn getVariableSize(file_header: *CentralDirectoryFileHeader) usize {
+        return file_header.filename_length + file_header.extra_field_length + file_header.file_comment_length;
+    }
+
+    pub fn readName(file_header: *CentralDirectoryFileHeader, file: anytype, buffer: []u8) !usize {
+        try file.seekTo(file_header.pos + 46);
         file_header.filename = buffer;
-        return reader.read(buffer[0..file_header.filename_length]);
+        return file.read(buffer[0..file_header.filename_length]);
     }
 
-    pub fn parseExtra(file_header: *CentralDirectoryFileHeader, reader: anytype, buffer: []u8) !usize {
+    pub fn readExtra(file_header: *CentralDirectoryFileHeader, file: anytype, buffer: []u8) !usize {
+        try file.seekTo(file_header.pos + 46 + file_header.filename_length);
         file_header.extra_field = buffer;
-        return reader.read(buffer[0..file_header.extra_field_length]);
+        return file.read(buffer[0..file_header.extra_field_length]);
     }
 
-    pub fn parseComment(file_header: *CentralDirectoryFileHeader, reader: anytype, buffer: []u8) !usize {
+    pub fn readComment(file_header: *CentralDirectoryFileHeader, file: anytype, buffer: []u8) !usize {
+        try file.seekTo(file_header.pos + 46 + file_header.filename_length + file_header.extra_field_length);
         file_header.file_comment = buffer;
-        return reader.read(buffer[0..file_header.file_comment_length]);
+        return file.read(buffer[0..file_header.file_comment_length]);
     }
 };
 
@@ -234,13 +244,9 @@ pub const CentralDirectoryEndRecord = struct {
         const reader = file.reader();
         var i: usize = 0;
         while (i < end_record.record_count) : (i += 1) {
-            file_buffer[i] = try CentralDirectoryFileHeader.parse(reader);
-            var buf: [4096]u8 = undefined;
-            const pos = try file.getPos();
+            file_buffer[i] = try CentralDirectoryFileHeader.parse(reader, try file.getPos());
             const varilength = file_buffer[i].filename_length + file_buffer[i].extra_field_length + file_buffer[i].file_comment_length;
-            const read_length = try file.read(buf[0..varilength]);
-            std.log.debug("{s}", .{buf[0..read_length]});
-            try file.seekTo(pos + varilength);
+            try file.seekBy(varilength);
         }
         return ZIPDir{
             .directory_headers = file_buffer,
