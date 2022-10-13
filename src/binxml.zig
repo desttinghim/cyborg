@@ -135,6 +135,21 @@ const StringPool = struct {
                 .styles_start = try reader.readInt(u32, .Little),
             };
         }
+
+        pub fn getAlloc(self: Header, alloc: std.mem.Allocator, file: std.fs.File, ref: Ref) ![]const u16 {
+            try file.seekTo(self.header.header_size + ref.index * 4);
+            const reader = file.reader();
+            const offset = try reader.readInt(u32, .Little);
+            std.log.debug("{}, {}, {}", .{ ref.index, self.header.header_size, offset });
+            try file.seekTo(self.strings_start + offset * 2);
+            const length = try reader.readInt(u16, .Little);
+            std.log.debug("{}", .{length});
+            const mem = try alloc.alloc(u16, length);
+            for (mem) |*char| {
+                char.* = try reader.readInt(u16, .Little);
+            }
+            return mem;
+        }
     };
 
     const Span = struct {
@@ -387,7 +402,6 @@ pub fn readAlloc(file: std.fs.File, alloc: std.mem.Allocator) !Document {
     var pos: usize = try file.getPos();
     var header = try ResourceChunk.read(reader);
     while (true) {
-        std.log.debug("{any}", .{header});
         switch (header.type) {
             .StringPool => string_pool = try StringPool.Header.read(reader, header),
             .XmlResourceMap => resource_map = XMLTree.Header{ .header = header },

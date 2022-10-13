@@ -85,6 +85,56 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 
     var document = try binxml.readAlloc(file, alloc);
 
-    _ = document;
-    _ = stdout;
+    for (document.resource_nodes) |node| {
+        switch (node.extended) {
+            .CData => |cdata| {
+                const data = try document.string_pool.getAlloc(alloc, file, cdata.data);
+                defer alloc.free(data);
+
+                try std.fmt.format(stdout.writer(), "{}", .{
+                    std.unicode.fmtUtf16le(data),
+                });
+            },
+            .Namespace => |namespace| {
+                const prefix = try document.string_pool.getAlloc(alloc, file, namespace.prefix);
+                defer alloc.free(prefix);
+                const uri = try document.string_pool.getAlloc(alloc, file, namespace.uri);
+                defer alloc.free(uri);
+
+                try std.fmt.format(stdout.writer(), "prefix: {}, uri: {}", .{
+                    std.unicode.fmtUtf16le(prefix),
+                    std.unicode.fmtUtf16le(uri),
+                });
+            },
+            .EndElement => |end| {
+                const ns = try document.string_pool.getAlloc(alloc, file, end.namespace);
+                defer alloc.free(ns);
+                const name = try document.string_pool.getAlloc(alloc, file, end.name);
+                defer alloc.free(name);
+
+                try std.fmt.format(stdout.writer(), "ns: {}, name: {}", .{
+                    std.unicode.fmtUtf16le(ns),
+                    std.unicode.fmtUtf16le(name),
+                });
+            },
+            .Attribute => |attribute| {
+                const ns = try document.string_pool.getAlloc(alloc, file, attribute.namespace);
+                defer alloc.free(ns);
+                const name = try document.string_pool.getAlloc(alloc, file, attribute.name);
+                defer alloc.free(name);
+
+                try std.fmt.format(stdout.writer(), "ns: {}, name: {}, start: {}, size: {}, count: {}, id_index: {}, class_index: {}, style_index: {}", .{
+                    std.unicode.fmtUtf16le(ns),
+                    std.unicode.fmtUtf16le(name),
+                    attribute.start,
+                    attribute.size,
+                    attribute.count,
+                    attribute.id_index,
+                    attribute.class_index,
+                    attribute.style_index,
+                });
+            },
+        }
+        try std.fmt.format(stdout.writer(), "\n", .{});
+    }
 }
