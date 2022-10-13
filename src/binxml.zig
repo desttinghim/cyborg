@@ -317,7 +317,7 @@ const ResourceTable = struct {
             layout: packed struct(u8) {
                 size: enum(u4) { Any = 0, Small = 1, Normal = 2, Large = 3, XLarge = 4 },
                 long: enum(u2) { Any = 0, No = 1, Yes = 2 },
-                dir: enum(u2) { Any = 0, LTR = 1, RTL = 2 }, // TODO
+                dir: enum(u2) { Any = 0, LTR = 1, RTL = 2 },
             },
             ui_mode: packed struct(u8) {
                 type: enum(u4) { Any = 0, Normal = 1, Desk = 2, Car = 3, Television = 4, Appliance = 5, Watch = 6, VrHeadset = 7 },
