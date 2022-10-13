@@ -86,6 +86,15 @@ const Value = struct {
     res0: u8,
     datatype: DataType,
     data: u32,
+
+    fn read(reader: anytype) !Value {
+        return Value{
+            .size = try reader.readInt(u16, .Little),
+            .res0 = try reader.readInt(u8, .Little),
+            .datatype = @intToEnum(DataType, try reader.readInt(u16, .Little)),
+            .data = try reader.readInt(u32, .Little),
+        };
+    }
 };
 
 const TableRef = struct {
@@ -95,6 +104,10 @@ const TableRef = struct {
 const StringPool = struct {
     const Ref = struct {
         index: u32,
+
+        pub fn read(reader: anytype) !Ref {
+            return Ref{ .index = try reader.readInt(u32, .Little) };
+        }
     };
 
     const Header = struct {
@@ -112,9 +125,9 @@ const StringPool = struct {
             _unused: u30 = 0,
         };
 
-        fn read(reader: anytype) !Header {
+        fn read(reader: anytype, header: ResourceChunk) !Header {
             return Header{
-                .header = try ResourceChunk.read(reader),
+                .header = header,
                 .string_count = try reader.readInt(u32, .Little),
                 .style_count = try reader.readInt(u32, .Little),
                 .flags = @bitCast(Flags, try reader.readInt(u32, .Little)),
@@ -140,6 +153,49 @@ const XMLTree = struct {
         header: ResourceChunk,
         line_number: u32,
         comment: StringPool.Ref,
+        extended: NodeExtended,
+
+        fn read(reader: anytype, header: ResourceChunk) !Node {
+            return Node{
+                .header = header,
+                .line_number = try reader.readInt(u32, .Little),
+                .comment = try StringPool.Ref.read(reader),
+                .extended = switch (header.type) {
+                    .XmlCData => .{ .CData = .{
+                        .data = try StringPool.Ref.read(reader),
+                        .value = try Value.read(reader),
+                    } },
+                    .XmlStartNamespace,
+                    .XmlEndNamespace,
+                    => .{ .Namespace = .{
+                        .prefix = try StringPool.Ref.read(reader),
+                        .uri = try StringPool.Ref.read(reader),
+                    } },
+                    .XmlEndElement => .{ .EndElement = .{
+                        .namespace = try StringPool.Ref.read(reader),
+                        .name = try StringPool.Ref.read(reader),
+                    } },
+                    .XmlStartElement => .{ .Attribute = .{
+                        .namespace = try StringPool.Ref.read(reader),
+                        .name = try StringPool.Ref.read(reader),
+                        .start = try reader.readInt(u16, .Little),
+                        .size = try reader.readInt(u16, .Little),
+                        .count = try reader.readInt(u16, .Little),
+                        .id_index = try reader.readInt(u16, .Little),
+                        .class_index = try reader.readInt(u16, .Little),
+                        .style_index = try reader.readInt(u16, .Little),
+                    } },
+                    else => @panic("not an xml element"),
+                },
+            };
+        }
+    };
+
+    const NodeExtended = union(enum) {
+        CData: CDataExtended,
+        Namespace: NamespaceExtended,
+        EndElement: EndElementExtended,
+        Attribute: AttributeExtended,
     };
 
     const CDataExtended = struct {
@@ -304,7 +360,9 @@ const ResourceTable = struct {
 };
 
 pub const Document = struct {
-    string_buffer: []const u16,
+    string_pool: StringPool.Header,
+    resource_map: XMLTree.Header,
+    resource_nodes: []XMLTree.Node,
 };
 
 pub fn readAlloc(file: std.fs.File, alloc: std.mem.Allocator) !Document {
@@ -317,47 +375,38 @@ pub fn readAlloc(file: std.fs.File, alloc: std.mem.Allocator) !Document {
 
     if (!std.mem.eql(u8, &signature, "\x03\x00\x08\x00")) return error.WrongMagicBytes;
 
-    _ = try reader.readInt(u32, .Little);
+    const file_length = try reader.readInt(u32, .Little);
 
-    const string_pool = try StringPool.Header.read(reader);
+    std.log.debug("{any}", .{file_length});
 
-    std.log.debug("{any}", .{string_pool});
+    var string_pool: StringPool.Header = undefined;
+    var resource_map: XMLTree.Header = undefined;
+    var nodes = std.ArrayList(XMLTree.Node).init(alloc);
+    defer nodes.deinit();
 
-    const string_table_end = string_pool.header.size;
-    const string_table_count = string_pool.string_count;
-    const string_table_offset = string_pool.header.header_size + string_table_count * 4;
-
-    std.log.debug("string table @ {}-{}, {} entries", .{ string_table_offset, string_table_end, string_table_count });
-
-    const string_offsets = try alloc.alloc(u32, string_table_count);
-    for (string_offsets) |*offset| {
-        offset.* = try reader.readInt(u32, .Little);
-    }
-
-    const string_buffer = try alloc.alloc(u16, (string_table_end - string_table_offset) / 2);
-    var i: usize = 0;
-    var pos: usize = 0;
-    while (i < string_table_count) : (i += 1) {
-        // std.log.debug("{}", .{try file.getPos()});
-        const len = try reader.readInt(u16, .Little);
-        const buf = string_buffer[pos .. pos + 1 + len];
-        pos += len + 1;
-        for (buf) |*char| {
-            char.* = try reader.readInt(u16, .Little);
+    var pos: usize = try file.getPos();
+    var header = try ResourceChunk.read(reader);
+    while (true) {
+        std.log.debug("{any}", .{header});
+        switch (header.type) {
+            .StringPool => string_pool = try StringPool.Header.read(reader, header),
+            .XmlResourceMap => resource_map = XMLTree.Header{ .header = header },
+            .XmlStartNamespace,
+            .XmlStartElement,
+            .XmlEndElement,
+            .XmlEndNamespace,
+            => try nodes.append(try XMLTree.Node.read(reader, header)),
+            else => break,
         }
-        std.log.debug("{s}", .{std.unicode.fmtUtf16le(buf)});
-    }
-
-    while (try reader.readInt(u32, .Little) != 0x00100102) {}
-    std.log.debug("found start tag at {}", .{try file.getPos()});
-
-    var tag: [5]u32 = undefined;
-    for (tag) |*value| {
-        value.* = try reader.readInt(u32, .Little);
-        std.log.debug("{}", .{value.*});
+        if (pos + header.size >= file_length) break;
+        try file.seekTo(pos + header.size);
+        pos = try file.getPos();
+        header = try ResourceChunk.read(reader);
     }
 
     return Document{
-        .string_buffer = string_buffer,
+        .string_pool = string_pool,
+        .resource_map = resource_map,
+        .resource_nodes = nodes.toOwnedSlice(),
     };
 }
