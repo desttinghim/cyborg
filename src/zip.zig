@@ -16,7 +16,7 @@ pub const GeneralFlags = packed struct(u16) {
     mask_header_values: bool,
     _reserved2: u2,
 
-    pub fn parse(reader: anytype) !GeneralFlags {
+    pub fn read(reader: anytype) !GeneralFlags {
         return @bitCast(GeneralFlags, try reader.readInt(u16, .Little));
     }
 };
@@ -40,7 +40,7 @@ pub const CompressionMethod = enum(u16) {
     IbmLz77 = 19,
     PPMdversionIrevision1 = 98,
 
-    pub fn parse(reader: anytype) !CompressionMethod {
+    pub fn read(reader: anytype) !CompressionMethod {
         const i = try reader.readInt(u16, .Little);
         return std.meta.intToEnum(CompressionMethod, i) catch |e| {
             std.log.debug("Invalid Compression Method value: {}", .{i});
@@ -54,7 +54,7 @@ pub const DosTime = packed struct(u16) {
     minute: u5,
     hour: u6,
 
-    pub fn parse(reader: anytype) !DosTime {
+    pub fn read(reader: anytype) !DosTime {
         return @bitCast(DosTime, try reader.readInt(u16, .Little));
     }
 };
@@ -64,7 +64,7 @@ pub const DosDate = packed struct(u16) {
     month: u4,
     years: u8,
 
-    pub fn parse(reader: anytype) !DosDate {
+    pub fn read(reader: anytype) !DosDate {
         return @bitCast(DosDate, try reader.readInt(u16, .Little));
     }
 };
@@ -113,7 +113,7 @@ pub const Version = packed struct(u16) {
     version: u8,
     system: System,
 
-    pub fn parse(reader: anytype) !Version {
+    pub fn read(reader: anytype) !Version {
         return @bitCast(Version, try reader.readInt(u16, .Little));
     }
 };
@@ -124,7 +124,7 @@ pub const InternalFileAttr = packed struct(u16) {
     do_control_record_precede_logical_record: bool,
     _unused: u13,
 
-    pub fn parse(reader: anytype) !InternalFileAttr {
+    pub fn read(reader: anytype) !InternalFileAttr {
         return @bitCast(InternalFileAttr, try reader.readInt(u16, .Little));
     }
 };
@@ -133,10 +133,10 @@ pub const CentralDirectoryFileHeader = struct {
     const SIGNATURE = "PK\x01\x02";
     pos: usize,
     signature: [4]u8,
-    version_madeby: u16,
-    version_needed: u16,
+    version_madeby: Version,
+    version_needed: Version,
     flags: GeneralFlags,
-    compression: u16,
+    compression: CompressionMethod,
     last_modified_time: DosTime,
     last_modified_date: DosDate,
     crc_32: u32,
@@ -153,17 +153,17 @@ pub const CentralDirectoryFileHeader = struct {
     extra_field: ?[]u8,
     file_comment: ?[]u8,
 
-    pub fn parse(reader: anytype, pos: usize) !CentralDirectoryFileHeader {
+    pub fn read(reader: anytype, pos: usize) !CentralDirectoryFileHeader {
         var file_header: CentralDirectoryFileHeader = undefined;
         file_header.pos = pos;
         std.debug.assert(try reader.read(&file_header.signature) == 4);
         std.debug.assert(std.mem.eql(u8, SIGNATURE, &file_header.signature));
-        file_header.version_madeby = try reader.readInt(u16, .Little);
-        file_header.version_needed = try reader.readInt(u16, .Little);
-        file_header.flags = try GeneralFlags.parse(reader);
-        file_header.compression = try reader.readInt(u16, .Little); // try CompressionMethod.parse(reader);
-        file_header.last_modified_time = try DosTime.parse(reader);
-        file_header.last_modified_date = try DosDate.parse(reader);
+        file_header.version_madeby = try Version.read(reader);
+        file_header.version_needed = try Version.read(reader);
+        file_header.flags = try GeneralFlags.read(reader);
+        file_header.compression = try CompressionMethod.read(reader);
+        file_header.last_modified_time = try DosTime.read(reader);
+        file_header.last_modified_date = try DosDate.read(reader);
         file_header.crc_32 = try reader.readInt(u32, .Little);
         file_header.compressed_size = try reader.readInt(u32, .Little);
         file_header.uncompressed_size = try reader.readInt(u32, .Little);
@@ -171,7 +171,7 @@ pub const CentralDirectoryFileHeader = struct {
         file_header.extra_field_length = try reader.readInt(u16, .Little);
         file_header.file_comment_length = try reader.readInt(u16, .Little);
         file_header.disk_number = try reader.readInt(u16, .Little);
-        file_header.internal_file_attr = try InternalFileAttr.parse(reader);
+        file_header.internal_file_attr = try InternalFileAttr.read(reader);
         file_header.external_file_attr = try reader.readInt(u32, .Little);
         file_header.relative_offset = try reader.readInt(u32, .Little);
         file_header.filename = null;
@@ -180,7 +180,7 @@ pub const CentralDirectoryFileHeader = struct {
         return file_header;
     }
 
-    pub fn getVariableSize(file_header: *CentralDirectoryFileHeader) usize {
+    pub fn getVariableSize(file_header: CentralDirectoryFileHeader) usize {
         return file_header.filename_length + file_header.extra_field_length + file_header.file_comment_length;
     }
 
@@ -216,7 +216,7 @@ pub const CentralDirectoryEndRecord = struct {
     comment_length: u16,
     comment: ?[]u8,
 
-    pub fn parse(reader: anytype, pos: usize) !CentralDirectoryEndRecord {
+    pub fn read(reader: anytype, pos: usize) !CentralDirectoryEndRecord {
         var end_record: CentralDirectoryEndRecord = undefined;
         end_record.stream_pos = pos;
         _ = try reader.read(&end_record.signature);
@@ -238,13 +238,13 @@ pub const CentralDirectoryEndRecord = struct {
 
     /// Expects an EndRecord and a buffer of CentralDirectoryFileHeader's large enough to hold the
     /// number of records specified in the header
-    pub fn parseDirectory(end_record: CentralDirectoryEndRecord, file: anytype, file_buffer: []CentralDirectoryFileHeader) !ZIPDir {
+    pub fn readDirectory(end_record: CentralDirectoryEndRecord, file: anytype, file_buffer: []CentralDirectoryFileHeader) !ZIPDir {
         std.debug.assert(file_buffer.len >= end_record.record_count);
         try file.seekTo(end_record.directory_offset);
         const reader = file.reader();
         var i: usize = 0;
         while (i < end_record.record_count) : (i += 1) {
-            file_buffer[i] = try CentralDirectoryFileHeader.parse(reader, try file.getPos());
+            file_buffer[i] = try CentralDirectoryFileHeader.read(reader, try file.getPos());
             const varilength = file_buffer[i].filename_length + file_buffer[i].extra_field_length + file_buffer[i].file_comment_length;
             try file.seekBy(varilength);
         }
@@ -258,13 +258,6 @@ pub const CentralDirectoryEndRecord = struct {
 /// Expects a File
 pub fn findEndRecord(file: anytype) !CentralDirectoryEndRecord {
     var i: usize = 22; // minimum possible record size
-    {
-        var buff: [22]u8 = undefined;
-        try file.seekTo(try file.getEndPos() - i);
-        const len = try file.read(&buff);
-        const hex = std.fmt.fmtSliceHexUpper(&buff);
-        std.log.debug("len {}, hex {s}", .{ len, hex });
-    }
     var signature: [4]u8 = undefined;
     try file.seekTo(try file.getEndPos() - i);
     _ = try file.read(&signature);
@@ -272,7 +265,7 @@ pub fn findEndRecord(file: anytype) !CentralDirectoryEndRecord {
         return error.CouldntRead;
     }
     try file.seekTo(try file.getEndPos() - i);
-    var end_record = CentralDirectoryEndRecord.parse(file.reader(), i);
+    var end_record = CentralDirectoryEndRecord.read(file.reader(), i);
     return end_record;
 }
 
