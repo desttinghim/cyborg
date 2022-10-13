@@ -88,10 +88,16 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 
     var document = try binxml.readAlloc(file, arena_alloc);
 
+    var indent: usize = 0;
+
     for (document.resource_nodes) |node| {
-        try std.fmt.format(stdout.writer(), "{s}\n\t", .{
-            @tagName(node.header.type),
-        });
+        var iloop: usize = 0;
+        while (iloop < indent) : (iloop += 1) {
+            try std.fmt.format(stdout, "\t", .{});
+        }
+        // try std.fmt.format(stdout.writer(), "{s}\n\t", .{
+        //     @tagName(node.header.type),
+        // });
         switch (node.extended) {
             .CData => |cdata| {
                 const data = try document.string_pool.getAlloc(arena_alloc, file, cdata.data) orelse &[_]u16{ 'E', 'N', 'D' };
@@ -101,53 +107,61 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
                 });
             },
             .Namespace => |namespace| {
-                const prefix = try document.string_pool.getAlloc(arena_alloc, file, namespace.prefix) orelse &[_]u16{ 'E', 'N', 'D' };
-                const uri = try document.string_pool.getAlloc(arena_alloc, file, namespace.uri) orelse &[_]u16{ 'E', 'N', 'D' };
+                if (node.header.type == .XmlEndNamespace) {
+                    indent -= 1;
+                } else {
+                    indent += 1;
+                    const prefix = try document.string_pool.getAlloc(arena_alloc, file, namespace.prefix) orelse &[_]u16{ 'E', 'N', 'D' };
+                    const uri = try document.string_pool.getAlloc(arena_alloc, file, namespace.uri) orelse &[_]u16{ 'E', 'N', 'D' };
 
-                try std.fmt.format(stdout.writer(), "prefix: {}, uri: {}", .{
-                    std.unicode.fmtUtf16le(prefix),
-                    std.unicode.fmtUtf16le(uri),
-                });
+                    try std.fmt.format(stdout.writer(), "xmlns:{}={}", .{
+                        std.unicode.fmtUtf16le(prefix),
+                        std.unicode.fmtUtf16le(uri),
+                    });
+                }
             },
             .EndElement => |end| {
-                const ns = try document.string_pool.getAlloc(arena_alloc, file, end.namespace) orelse &[_]u16{ 'E', 'N', 'D' };
-                const name = try document.string_pool.getAlloc(arena_alloc, file, end.name) orelse &[_]u16{ 'E', 'N', 'D' };
-
-                try std.fmt.format(stdout.writer(), "ns: {}, name: {}", .{
-                    std.unicode.fmtUtf16le(ns),
-                    std.unicode.fmtUtf16le(name),
-                });
+                // if (try document.string_pool.getAlloc(arena_alloc, file, end.namespace)) |ns| {
+                //     try std.fmt.format(stdout.writer(), "{}:", .{std.unicode.fmtUtf16le(ns)});
+                // }
+                // if (try document.string_pool.getAlloc(arena_alloc, file, end.name)) |name| {
+                //     try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
+                // }
+                _ = end;
+                indent -= 1;
             },
             .Attribute => |attribute| {
                 {
-                    const ns = try document.string_pool.getAlloc(arena_alloc, file, attribute.namespace) orelse &[_]u16{ 'E', 'N', 'D' };
-                    const name = try document.string_pool.getAlloc(arena_alloc, file, attribute.name) orelse &[_]u16{ 'E', 'N', 'D' };
-
-                    try std.fmt.format(stdout.writer(), "ns: {}, name: {}, start: {}, size: {}, count: {}, id_index: {}, class_index: {}, style_index: {}", .{
-                        std.unicode.fmtUtf16le(ns),
-                        std.unicode.fmtUtf16le(name),
-                        attribute.start,
-                        attribute.size,
-                        attribute.count,
-                        attribute.id_index,
-                        attribute.class_index,
-                        attribute.style_index,
-                    });
+                    if (try document.string_pool.getAlloc(arena_alloc, file, attribute.namespace)) |ns| {
+                        try std.fmt.format(stdout.writer(), "{}:", .{std.unicode.fmtUtf16le(ns)});
+                    }
+                    if (try document.string_pool.getAlloc(arena_alloc, file, attribute.name)) |name| {
+                        try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
+                    }
                 }
                 if (attribute.list) |list| {
                     for (list) |attr| {
-                        const ns = try document.string_pool.getAlloc(arena_alloc, file, attr.namespace) orelse &[_]u16{ 'E', 'N', 'D' };
-                        const name = try document.string_pool.getAlloc(arena_alloc, file, attr.name) orelse &[_]u16{ 'E', 'N', 'D' };
-                        const raw = try document.string_pool.getAlloc(arena_alloc, file, attr.raw_value) orelse &[_]u16{ 'E', 'N', 'D' };
-
-                        try std.fmt.format(stdout.writer(), "\n\tns: {}, name: {}, raw: {}\n\t\ttyped: {}", .{
-                            std.unicode.fmtUtf16le(ns),
-                            std.unicode.fmtUtf16le(name),
-                            std.unicode.fmtUtf16le(raw),
-                            attr.typed_value,
-                        });
+                        try std.fmt.format(stdout, "\n", .{});
+                        var iloop2: usize = 0;
+                        while (iloop2 < indent + 1) : (iloop2 += 1) {
+                            try std.fmt.format(stdout, "\t", .{});
+                        }
+                        // if (try document.string_pool.getAlloc(arena_alloc, file, attr.namespace)) |ns| {
+                        //     try std.fmt.format(stdout.writer(), "\n\t{}/", .{std.unicode.fmtUtf16le(ns)});
+                        // }
+                        if (try document.string_pool.getAlloc(arena_alloc, file, attr.name)) |name| {
+                            try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
+                        }
+                        if (try document.string_pool.getAlloc(arena_alloc, file, attr.raw_value)) |raw| {
+                            try std.fmt.format(stdout.writer(), "={}", .{std.unicode.fmtUtf16le(raw)});
+                        } else {
+                            try std.fmt.format(stdout.writer(), "={s}", .{
+                                @tagName(attr.typed_value.datatype),
+                            });
+                        }
                     }
                 }
+                indent += 1;
             },
         }
         try std.fmt.format(stdout.writer(), "\n", .{});
