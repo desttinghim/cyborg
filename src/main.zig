@@ -86,7 +86,5 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     var document = try binxml.readAlloc(file, alloc);
 
     _ = document;
-    // for (document.tokens.items) |token| {
-    //     try std.fmt.format(stdout.writer(), "{}\n", .{token});
-    // }
+    _ = stdout;
 }

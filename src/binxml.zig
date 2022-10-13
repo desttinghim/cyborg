@@ -68,10 +68,7 @@ const InternedString = struct {
 };
 
 pub const Document = struct {
-    string_buffer: std.ArrayList(u8),
-    string_id: std.ArrayList(InternedString),
-    bytes_buffer: std.ArrayList(u8),
-    tokens: std.ArrayList(TokenValue),
+    string_buffer: []const u16,
 };
 
 pub fn readAlloc(file: std.fs.File, alloc: std.mem.Allocator) !Document {
@@ -90,134 +87,41 @@ pub fn readAlloc(file: std.fs.File, alloc: std.mem.Allocator) !Document {
         std.log.debug("{}", .{value.*});
     }
 
-    const string_table_offset = header[2];
+    const string_table_end = header[2];
     const string_table_count = header[3];
+    const string_table_offset = 0x24 + string_table_count * 4;
 
-    std.log.debug("string table @ {}, {} entries", .{ string_table_offset, string_table_count });
-
-    var string_offsets = try alloc.alloc(u32, string_table_count);
+    std.log.debug("string table @ {}-{}, {} entries", .{ string_table_offset, string_table_end, string_table_count });
+    // try file.seekTo(string_table_offset);
+    const string_offsets = try alloc.alloc(u32, string_table_count);
     for (string_offsets) |*offset| {
         offset.* = try reader.readInt(u32, .Little);
-        std.log.debug("offset {}", .{offset.*});
     }
 
-    var string_buffer = std.ArrayList(u8).init(alloc);
-    errdefer string_buffer.deinit();
-    var string_id = std.ArrayList(InternedString).init(alloc);
-    errdefer string_id.deinit();
-    var bytes_buffer = std.ArrayList(u8).init(alloc);
-    errdefer bytes_buffer.deinit();
-    var tokens = std.ArrayList(TokenValue).init(alloc);
-    errdefer tokens.deinit();
-    while (reader.readByte() catch null) |byte| {
-        const event_num: u4 = @intCast(u4, byte & 0x0F);
-        const _type_num: u4 = @intCast(u4, byte & 0xF0 >> 4);
-        const event = try std.meta.intToEnum(Event, event_num);
-        const _type = try std.meta.intToEnum(Type, _type_num);
-        const token = Token{ .event = event, .type = _type };
-        switch (_type) {
-            .Null => {
-                try tokens.append(TokenValue{ .token = token, .value = .Null });
-            },
-            .String => {
-                const length = try reader.readInt(u16, .Little);
-                const buf = try alloc.alloc(u8, length);
-                _ = try reader.read(buf);
-                try tokens.append(TokenValue{ .token = token, .value = .{ .String = buf } });
-            },
-            .StringInterned => {
-                var id = try reader.readInt(u16, .Little);
-                if (id == 0xFFFF) {
-                    const length = try reader.readInt(u16, .Little);
-                    const pos = @intCast(u16, string_buffer.items.len);
-                    var i: usize = 0;
-                    while (i < length) {
-                        try string_buffer.append(try reader.readByte());
-                    }
-                    id = @intCast(u16, string_id.items.len);
-                    try string_id.append(.{ .pos = pos, .length = length });
-                }
-                try tokens.append(TokenValue{ .token = token, .value = .{ .StringInterned = id } });
-            },
-            .BytesHex => {
-                const pos = bytes_buffer.items.len;
-                const length = try reader.readInt(u16, .Little);
-                var i: usize = 0;
-                while (i < length) {
-                    try bytes_buffer.append(try reader.readByte());
-                }
-                try tokens.append(TokenValue{ .token = token, .value = .{ .BytesHex = .{
-                    .pos = pos,
-                    .length = length,
-                } } });
-            },
-            .BytesBase64 => {
-                const pos = bytes_buffer.items.len;
-                const length = try reader.readInt(u16, .Little);
-                var i: usize = 0;
-                while (i < length) {
-                    try bytes_buffer.append(try reader.readByte());
-                }
-                try tokens.append(TokenValue{ .token = token, .value = .{ .BytesBase64 = .{
-                    .pos = pos,
-                    .length = length,
-                } } });
-            },
-            .Int => {
-                try tokens.append(TokenValue{
-                    .token = token,
-                    .value = .{ .Int = try reader.readInt(u32, .Little) },
-                });
-            },
-            .IntHex => {
-                try tokens.append(TokenValue{
-                    .token = token,
-                    .value = .{ .IntHex = try reader.readInt(u32, .Little) },
-                });
-            },
-            .Long => {
-                try tokens.append(TokenValue{
-                    .token = token,
-                    .value = .{ .Long = try reader.readInt(u64, .Little) },
-                });
-            },
-            .LongHex => {
-                try tokens.append(TokenValue{
-                    .token = token,
-                    .value = .{ .LongHex = try reader.readInt(u64, .Little) },
-                });
-            },
-            .Float => {
-                try tokens.append(TokenValue{
-                    .token = token,
-                    .value = .{ .Float = @bitCast(f32, try reader.readInt(u32, .Little)) },
-                });
-            },
-            .Double => {
-                try tokens.append(TokenValue{
-                    .token = token,
-                    .value = .{ .Double = @bitCast(f64, try reader.readInt(u64, .Little)) },
-                });
-            },
-            .BoolTrue => {
-                try tokens.append(TokenValue{
-                    .token = token,
-                    .value = .BoolTrue,
-                });
-            },
-            .BoolFalse => {
-                try tokens.append(TokenValue{
-                    .token = token,
-                    .value = .BoolFalse,
-                });
-            },
+    const string_buffer = try alloc.alloc(u16, (string_table_end - string_table_offset) / 2);
+    var i: usize = 0;
+    var pos: usize = 0;
+    while (i < string_table_count) : (i += 1) {
+        // std.log.debug("{}", .{try file.getPos()});
+        const len = try reader.readInt(u16, .Little);
+        const buf = string_buffer[pos..pos + 1 + len];
+        pos += len + 1;
+        for (buf) |*char| {
+            char.* = try reader.readInt(u16, .Little);
         }
+        std.log.debug("{s}", .{std.unicode.fmtUtf16le(buf)});
+    }
+
+    while (try reader.readInt(u32, .Little) != 0x00100102) {}
+    std.log.debug("found start tag at {}", .{try file.getPos()});
+
+    var tag : [5]u32 = undefined;
+    for (tag) |*value| {
+        value.* = try reader.readInt(u32, .Little);
+        std.log.debug("{}", .{value.*});
     }
 
     return Document{
         .string_buffer = string_buffer,
-        .string_id = string_id,
-        .bytes_buffer = bytes_buffer,
-        .tokens = tokens,
     };
 }
