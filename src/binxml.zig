@@ -282,45 +282,48 @@ const ResourceTable = struct {
 
     const Config = struct {
         size: u32,
-        geo: union {
-            imsi: u32,
-            code: packed struct(u32) {
-                mcc: u16,
-                mnc: u16,
-            },
+        imsi: packed struct(u32) {
+            mcc: u16,
+            mnc: u16,
         },
-        locale: union {
-            code: packed struct(u32) {
-                language: [2]u8,
-                country: [2]u8,
-            },
-            locale: u32,
+        locale: packed struct(u32) {
+            language: [2]u8,
+            country: [2]u8,
         },
-        screen_type: union {
-            details: packed struct(u32) {
-                orientation: u8,
-                touchscreen: u8,
-                density: u16,
-            },
-            screen_type: u32,
+        screen_type: packed struct(u32) {
+            orientation: enum(u8) { Any = 0, Port = 1, Land = 2, Square = 3 },
+            touchscreen: enum(u8) { Any = 0, NoTouch = 1, Stylus = 2, Finger = 3 },
+            density: enum(u16) { Default = 0, Low = 120, Medium = 160, Tv = 213, High = 240, XHigh = 320, XXHigh = 480, XXXHigh = 640, Any = 0xFFFE, None = 0xFFFF },
         },
         input: packed struct(u32) {
-            keyboard: u8,
-            navigation: u8,
-            input_flags: u8,
+            keyboard: enum(u8) { Any = 0, NoKeys = 1, Qwerty = 2, _12Key = 3 },
+            navigation: enum(u8) { Any = 0, NoNav = 1, Dpad = 2, Trackball = 3, Wheel = 4 },
+            input_flags: packed struct(u8) {
+                keys_hidden: enum(u2) { Any = 0, No = 1, Yes = 2, Soft = 3 },
+                nav_hidden: enum(u2) { Any = 0, No = 1, Yes = 2 },
+                _unused: u4,
+            },
             input_pad: u8,
         },
         screen_size: packed struct(u32) {
-            width: u16,
-            height: u16,
+            width: enum(u16) { Any = 0, _ },
+            height: enum(u16) { Any = 0, _ },
         },
         version: packed struct(u32) {
-            sdk: u16,
-            minor: u16,
+            sdk: enum(u16) { Any = 0, _ },
+            minor: enum(u16) { Any = 0, _ }, // must be 0, meaning is undefined
         },
         screen_config: packed struct(u32) {
-            layout: u8,
-            ui_mode: u8,
+            layout: packed struct(u8) {
+                size: enum(u4) { Any = 0, Small = 1, Normal = 2, Large = 3, XLarge = 4 },
+                long: enum(u2) { Any = 0, No = 1, Yes = 2 },
+                dir: enum(u2) { Any = 0, LTR = 1, RTL = 2 }, // TODO
+            },
+            ui_mode: packed struct(u8) {
+                type: enum(u4) { Any = 0, Normal = 1, Desk = 2, Car = 3, Television = 4, Appliance = 5, Watch = 6, VrHeadset = 7 },
+                night: enum(u2) { Any = 0, No = 1, Yes = 2 },
+                _unused: u2,
+            },
             smallest_screen_width_dp: u16,
         },
         screen_size_dp: packed struct(u32) {
@@ -330,8 +333,15 @@ const ResourceTable = struct {
         locale_script: [4]u8,
         locale_version: [8]u8,
         screen_config2: packed struct(u32) {
-            layout2: u8,
-            color_mode: u8,
+            layout2: packed struct(u8) {
+                round: enum(u2) { Any = 0, No = 1, Yes = 2 },
+                _unused: u6,
+            },
+            color_mode: packed struct(u8) {
+                wide_color: enum(u2) { Any = 0, No = 1, Yes = 2 },
+                hdr: enum(u2) { Any = 0, No = 1, Yes = 2 },
+                _unused: u4,
+            },
             _pad: u16,
         },
         locale_script_was_computed: bool,
@@ -401,13 +411,9 @@ pub fn readAlloc(file: std.fs.File, alloc: std.mem.Allocator) !Document {
     const count = try reader.read(&signature);
     if (count != 4) return error.UnexpectedEof;
 
-    std.log.debug("magic bytes: {s} {any}", .{ &signature, signature });
-
     if (!std.mem.eql(u8, &signature, "\x03\x00\x08\x00")) return error.WrongMagicBytes;
 
     const file_length = try reader.readInt(u32, .Little);
-
-    std.log.debug("{any}", .{file_length});
 
     var string_pool: StringPool.Header = undefined;
     var resource_map: XMLTree.Header = undefined;
