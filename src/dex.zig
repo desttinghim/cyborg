@@ -764,7 +764,7 @@ const MethodAnnotation = struct {
     annotations_off: u32,
 };
 
-const ParamaterAnnotation = struct {
+const ParameterAnnotation = struct {
     parameter_idx: u32,
     annotations_off: u32,
 };
