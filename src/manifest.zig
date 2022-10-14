@@ -9,13 +9,13 @@ pub const Node = union(enum) {
 };
 
 pub const Attribute = struct {
-    namespace: ?*Namespace = null,
+    namespace: ?Namespace = null,
     name: []const u8,
     value: Value,
 };
 
 pub const Element = struct {
-    namespace: ?*Namespace = null,
+    namespace: ?Namespace = null,
     name: []const u8,
     attributes: []Attribute = &.{},
     children: []Node = &.{},
@@ -153,3 +153,29 @@ test "manifest" {
         },
     } };
 }
+
+// /// Builder
+// const AXML = struct {
+//     elements: std.ArrayList(Element),
+//     pub fn init(alloc: std.mem.Allocator) AXML {
+//         return AXML{};
+//     }
+// };
+
+// test "building xml tree" {
+//     const std = @import("std");
+//     const testing = std.testing;
+
+//     var arena = std.heap.ArenaAllocator(testing.allocator);
+//     const alloc = arena.allocator();
+//     var tree = AXML.init(alloc);
+//     const android = Namespace{ .prefix = "android", .uri = "http://schemas.android.com/apk/res/android" };
+//     const root = tree.root(AXML.namespace(android));
+//     tree.addChild(root, AXML.el(null, "manifest", .{
+//         .{ android, "compileSdkVersion", AXML.int(30) },
+//         .{ android, "compileSdkVersionCode", AXML.int(11) },
+//         .{ android, "package", AXML.string("net.random_projects.zig_android_template") },
+//         .{ android, "platformBuildVersionCode", AXML.int(30) },
+//         .{ android, "platformBuildVersionName", AXML.int(11) },
+//     }));
+// }

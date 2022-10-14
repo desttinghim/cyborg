@@ -1,4 +1,5 @@
 const std = @import("std");
+const axml = @import("manifest.zig");
 
 const Type = enum(u16) {
     Null = 0x0000,
@@ -32,56 +33,62 @@ const ResourceChunk = struct {
             .size = try reader.readInt(u32, .Little),
         };
     }
-};
 
-const DataType = enum(u8) {
-    Null = 0x00,
-    Reference = 0x01,
-    Attribute = 0x02,
-    String = 0x03,
-    Float = 0x04,
-    Dimension = 0x05,
-    Fraction = 0x06,
-    DynReference = 0x07,
-    DynAttribute = 0x08,
-    IntDec = 0x10,
-    IntHex = 0x11,
-    IntBool = 0x12,
-    IntColorARGB8 = 0x1c,
-    IntColorRGB8 = 0x1d,
-    IntColorARGB4 = 0x1e,
-    IntColorRGB4 = 0x1f,
-};
-
-const DimensionUnit = enum(u4) {
-    Pixels = 0x0,
-    DeviceIndependentPixels = 0x1,
-    ScaledDeviceIndependentPixels = 0x2,
-    Points = 0x3,
-    Inches = 0x4,
-    Millimeters = 0x5,
-    Fraction = 0x6,
-};
-
-const FractionUnit = packed struct(u8) {
-    unit: enum(u1) {
-        Basic,
-        Parent,
-    },
-    radix: enum(u3) {
-        r23p0 = 0,
-        r16p7 = 1,
-        r8p15 = 2,
-        r0p23 = 3,
-    },
-};
-
-const NullType = enum(u1) {
-    Undefined = 0,
-    Empty = 1,
+    pub fn write(header: ResourceChunk, writer: anytype) !void {
+        try writer.writeInt(u16, @enumToInt(header.type), .Little);
+        try writer.writeInt(u16, @enumToInt(header.header_size), .Little);
+        try writer.writeInt(u32, @enumToInt(header.size), .Little);
+    }
 };
 
 const Value = struct {
+    const DataType = enum(u8) {
+        Null = 0x00,
+        Reference = 0x01,
+        Attribute = 0x02,
+        String = 0x03,
+        Float = 0x04,
+        Dimension = 0x05,
+        Fraction = 0x06,
+        DynReference = 0x07,
+        DynAttribute = 0x08,
+        IntDec = 0x10,
+        IntHex = 0x11,
+        IntBool = 0x12,
+        IntColorARGB8 = 0x1c,
+        IntColorRGB8 = 0x1d,
+        IntColorARGB4 = 0x1e,
+        IntColorRGB4 = 0x1f,
+    };
+
+    const DimensionUnit = enum(u4) {
+        Pixels = 0x0,
+        DeviceIndependentPixels = 0x1,
+        ScaledDeviceIndependentPixels = 0x2,
+        Points = 0x3,
+        Inches = 0x4,
+        Millimeters = 0x5,
+        Fraction = 0x6,
+    };
+
+    const FractionUnit = packed struct(u8) {
+        unit: enum(u1) {
+            Basic,
+            Parent,
+        },
+        radix: enum(u3) {
+            r23p0 = 0,
+            r16p7 = 1,
+            r8p15 = 2,
+            r0p23 = 3,
+        },
+    };
+
+    const NullType = enum(u1) {
+        Undefined = 0,
+        Empty = 1,
+    };
+
     size: u16,
     res0: u8,
     datatype: DataType,
@@ -94,13 +101,15 @@ const Value = struct {
             .datatype = @intToEnum(DataType, try reader.readInt(u8, .Little)),
             .data = try reader.readInt(u32, .Little),
         };
-        // try reader.skipBytes(value.size - @sizeOf(Value), .{});
         return value;
     }
-};
 
-const TableRef = struct {
-    ident: u32,
+    pub fn write(value: Value, writer: anytype) !void {
+        try writer.writeInt(u16, @enumToInt(value.size), .Little);
+        try writer.writeInt(u8, value.res0, .Little);
+        try writer.writeInt(u8, @enumToInt(value.datatype), .Little);
+        try writer.writeInt(u32, value.data, .Little);
+    }
 };
 
 const StringPool = struct {
@@ -109,6 +118,9 @@ const StringPool = struct {
 
         pub fn read(reader: anytype) !Ref {
             return Ref{ .index = try reader.readInt(u32, .Little) };
+        }
+        pub fn write(ref: Ref, writer: anytype) !void {
+            try writer.write(u32, ref.index, .Little);
         }
     };
 
@@ -120,8 +132,7 @@ const StringPool = struct {
         strings_start: u32,
         styles_start: u32,
 
-        const Flags =
-            packed struct(u32) {
+        const Flags = packed struct(u32) {
             sorted: bool,
             utf8: bool,
             _unused: u30 = 0,
@@ -136,6 +147,15 @@ const StringPool = struct {
                 .strings_start = try reader.readInt(u32, .Little),
                 .styles_start = try reader.readInt(u32, .Little),
             };
+        }
+
+        pub fn write(header: Header, writer: anytype) !void {
+            try ResourceChunk.write(writer);
+            try writer.writeInt(u32, header.string_count, .Little);
+            try writer.writeInt(u32, header.style_count, .Little);
+            try writer.writeInt(u32, @bitCast(u32, header.flags), .Little);
+            try writer.writeInt(u32, header.strings_start, .Little);
+            try writer.writeInt(u32, header.styles_start, .Little);
         }
 
         pub fn getAlloc(self: Header, alloc: std.mem.Allocator, file: std.fs.File, ref: Ref) !?[]const u16 {
@@ -156,6 +176,32 @@ const StringPool = struct {
             return mem;
         }
     };
+
+    pub fn read(file: std.fs.File, header: Header, string_buf: []u16, string_pool: [][]const u16) !void {
+        const reader = file.reader();
+        // Copy UTF16 buffer into memory
+        try file.seekTo(8 + header.strings_start);
+        for (string_buf) |*char| {
+            char.* = try reader.readInt(u16, .Little);
+        }
+        // Create slices from offsets
+        try file.seekTo(8 + header.header.header_size);
+        for (string_pool) |*string| {
+            const offset = try reader.readInt(u32, .Little);
+            std.debug.assert(offset % 2 == 0);
+            var index = offset / 2;
+            var len: usize = string_buf[index];
+            if (len > 32767) {
+                len = (len & 0b0111_1111) << 16;
+                index += 1;
+                len += string_buf[index];
+            }
+            string.* = string_buf[index + 1 .. index + 1 + len];
+        }
+    }
+
+    // pub fn write(writer: anytype, pool: [][]const u8) !void {
+    // }
 
     const Span = struct {
         name: Ref,
@@ -181,32 +227,26 @@ const XMLTree = struct {
                 .line_number = try reader.readInt(u32, .Little),
                 .comment = try StringPool.Ref.read(reader),
                 .extended = switch (header.type) {
-                    .XmlCData => .{ .CData = .{
-                        .data = try StringPool.Ref.read(reader),
-                        .value = try Value.read(reader),
-                    } },
                     .XmlStartNamespace,
                     .XmlEndNamespace,
-                    => .{ .Namespace = .{
-                        .prefix = try StringPool.Ref.read(reader),
-                        .uri = try StringPool.Ref.read(reader),
-                    } },
-                    .XmlEndElement => .{ .EndElement = .{
-                        .namespace = try StringPool.Ref.read(reader),
-                        .name = try StringPool.Ref.read(reader),
-                    } },
-                    .XmlStartElement => .{ .Attribute = .{
-                        .namespace = try StringPool.Ref.read(reader),
-                        .name = try StringPool.Ref.read(reader),
-                        .start = try reader.readInt(u16, .Little),
-                        .size = try reader.readInt(u16, .Little),
-                        .count = try reader.readInt(u16, .Little),
-                        .id_index = try reader.readInt(u16, .Little),
-                        .class_index = try reader.readInt(u16, .Little),
-                        .style_index = try reader.readInt(u16, .Little),
-                    } },
+                    => .{ .Namespace = try NamespaceExtended.read(reader) },
+                    .XmlCData => .{ .CData = try CDataExtended.read(reader) },
+                    .XmlEndElement => .{ .EndElement = try EndElementExtended.read(reader) },
+                    .XmlStartElement => .{ .Attribute = try AttributeExtended.read(reader) },
                     else => @panic("not an xml element"),
                 },
+            };
+        }
+
+        pub fn write(node: Node, writer: anytype) !void {
+            try node.header.write(writer);
+            try writer.writeInt(u32, node.line_number, .Little);
+            try node.comment.write();
+            try switch (node.extended) {
+                .CData => |cdata| cdata.write(writer),
+                .Namespace => |namespace| namespace.write(writer),
+                .EndElement => |el| el.write(writer),
+                .Attribute => |attr| attr.write(writer),
             };
         }
     };
@@ -221,16 +261,48 @@ const XMLTree = struct {
     const CDataExtended = struct {
         data: StringPool.Ref,
         value: Value,
+        pub fn read(reader: anytype) !CDataExtended {
+            return CDataExtended{
+                .data = try StringPool.Ref.read(reader),
+                .value = try Value.read(reader),
+            };
+        }
+        pub fn write(cdata: CDataExtended, writer: anytype) !void {
+            try cdata.data.write(writer);
+            try cdata.value.write(writer);
+        }
     };
 
     const NamespaceExtended = struct {
         prefix: StringPool.Ref,
         uri: StringPool.Ref,
+
+        pub fn read(reader: anytype) !NamespaceExtended {
+            return NamespaceExtended{
+                .prefix = try StringPool.Ref.read(reader),
+                .uri = try StringPool.Ref.read(reader),
+            };
+        }
+        pub fn write(namespace: NamespaceExtended, writer: anytype) !void {
+            try namespace.prefix.write(writer);
+            try namespace.uri.write(writer);
+        }
     };
 
     const EndElementExtended = struct {
         namespace: StringPool.Ref,
         name: StringPool.Ref,
+
+        pub fn read(reader: anytype) !EndElementExtended {
+            return EndElementExtended{
+                .namespace = try StringPool.Ref.read(reader),
+                .name = try StringPool.Ref.read(reader),
+            };
+        }
+        pub fn write(el: EndElementExtended, writer: anytype) !void {
+            try el.namespace.write(writer);
+            try el.name.write(writer);
+        }
     };
 
     const AttributeExtended = struct {
@@ -242,7 +314,29 @@ const XMLTree = struct {
         id_index: u16,
         class_index: u16,
         style_index: u16,
-        list: ?[]Attribute = null,
+
+        pub fn read(reader: anytype) !AttributeExtended {
+            return AttributeExtended{
+                .namespace = try StringPool.Ref.read(reader),
+                .name = try StringPool.Ref.read(reader),
+                .start = try reader.readInt(u16, .Little),
+                .size = try reader.readInt(u16, .Little),
+                .count = try reader.readInt(u16, .Little),
+                .id_index = try reader.readInt(u16, .Little),
+                .class_index = try reader.readInt(u16, .Little),
+                .style_index = try reader.readInt(u16, .Little),
+            };
+        }
+        pub fn write(el: AttributeExtended, writer: anytype) !void {
+            try el.namespace.write(writer);
+            try el.name.write(writer);
+            try writer.writeInt(u16, el.start, .Little);
+            try writer.writeInt(u16, el.size, .Little);
+            try writer.writeInt(u16, el.count, .Little);
+            try writer.writeInt(u16, el.id_index, .Little);
+            try writer.writeInt(u16, el.class_index, .Little);
+            try writer.writeInt(u16, el.style_index, .Little);
+        }
     };
 
     const Attribute = struct {
@@ -258,6 +352,13 @@ const XMLTree = struct {
                 .raw_value = try StringPool.Ref.read(reader),
                 .typed_value = try Value.read(reader),
             };
+        }
+
+        pub fn write(attribute: Attribute, writer: anytype) !void {
+            try attribute.namespace.write(writer);
+            try attribute.name.write(writer);
+            try attribute.raw_value.write(writer);
+            try attribute.typed_value.write(writer);
         }
     };
 };
@@ -378,6 +479,10 @@ const ResourceTable = struct {
         key: StringPool.Ref,
     };
 
+    const TableRef = struct {
+        ident: u32,
+    };
+
     const MapEntry = struct {
         parent: TableRef,
         count: u32,
@@ -400,59 +505,155 @@ const ResourceTable = struct {
 };
 
 pub const Document = struct {
-    string_pool: StringPool.Header,
-    resource_map: XMLTree.Header,
+    arena: std.heap.ArenaAllocator,
+    string_buf: []const u16,
+    string_pool: [][]const u16,
+    string_pool_header: StringPool.Header,
     resource_nodes: []XMLTree.Node,
-};
+    resource_header: XMLTree.Header,
+    attributes: []Attribute,
 
-pub fn readAlloc(file: std.fs.File, alloc: std.mem.Allocator) !Document {
-    const reader = file.reader();
-    var signature: [4]u8 = undefined;
-    const count = try reader.read(&signature);
-    if (count != 4) return error.UnexpectedEof;
+    const Attribute = struct {
+        node: usize,
+        value: XMLTree.Attribute,
+    };
 
-    if (!std.mem.eql(u8, &signature, "\x03\x00\x08\x00")) return error.WrongMagicBytes;
+    pub fn readAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator) !Document {
+        var arena = std.heap.ArenaAllocator.init(backing_allocator);
+        errdefer arena.deinit();
+        const alloc = arena.allocator();
+        const reader = file.reader();
 
-    const file_length = try reader.readInt(u32, .Little);
+        var signature: [4]u8 = undefined;
+        const count = try reader.read(&signature);
+        if (count != 4) return error.UnexpectedEof;
 
-    var string_pool: StringPool.Header = undefined;
-    var resource_map: XMLTree.Header = undefined;
-    var nodes = std.ArrayList(XMLTree.Node).init(alloc);
-    defer nodes.deinit();
+        if (!std.mem.eql(u8, &signature, "\x03\x00\x08\x00")) return error.WrongMagicBytes;
 
-    var pos: usize = try file.getPos();
-    var header = try ResourceChunk.read(reader);
-    while (true) {
-        switch (header.type) {
-            .StringPool => string_pool = try StringPool.Header.read(reader, header),
-            .XmlResourceMap => resource_map = XMLTree.Header{ .header = header },
-            .XmlStartNamespace,
-            .XmlEndElement,
-            .XmlEndNamespace,
-            => try nodes.append(try XMLTree.Node.read(reader, header)),
-            .XmlStartElement => {
-                var node = try XMLTree.Node.read(reader, header);
-                var attribute = node.extended.Attribute;
-                if (attribute.count > 0) {
-                    var attrs = try alloc.alloc(XMLTree.Attribute, attribute.count);
-                    for (attrs) |*attr| {
-                        attr.* = try XMLTree.Attribute.read(reader);
+        const file_length = try reader.readInt(u32, .Little);
+
+        var string_buf: []u16 = undefined;
+        var string_pool: [][]const u16 = undefined;
+        var string_pool_header: StringPool.Header = undefined;
+        var resource_header: XMLTree.Header = undefined;
+        var nodes = std.ArrayList(XMLTree.Node).init(alloc);
+        defer nodes.deinit();
+        var attributes = std.ArrayList(Document.Attribute).init(alloc);
+        defer attributes.deinit();
+
+        var pos: usize = try file.getPos();
+        var header = try ResourceChunk.read(reader);
+        while (true) {
+            switch (header.type) {
+                .StringPool => {
+                    string_pool_header = try StringPool.Header.read(reader, header);
+                    const buf_size = (pos + header.size - string_pool_header.strings_start) / 2;
+                    string_buf = try alloc.alloc(u16, buf_size);
+                    string_pool = try alloc.alloc([]const u16, string_pool_header.string_count);
+                    try StringPool.read(file, string_pool_header, string_buf, string_pool);
+                },
+                .XmlResourceMap => resource_header = XMLTree.Header{ .header = header },
+                .XmlStartNamespace,
+                .XmlEndElement,
+                .XmlEndNamespace,
+                => try nodes.append(try XMLTree.Node.read(reader, header)),
+                .XmlStartElement => {
+                    var node_id = nodes.items.len;
+                    var node = try XMLTree.Node.read(reader, header);
+                    try nodes.append(node);
+                    var attribute = node.extended.Attribute;
+                    if (attribute.count > 0) {
+                        var i: usize = 0;
+                        while (i < attribute.count) : (i += 1) {
+                            try attributes.append(.{
+                                .node = node_id,
+                                .value = try XMLTree.Attribute.read(reader),
+                            });
+                        }
                     }
-                    node.extended.Attribute.list = attrs;
-                }
-                try nodes.append(node);
-            },
-            else => break,
+                },
+                else => break,
+            }
+            if (pos + header.size >= file_length) break;
+            try file.seekTo(pos + header.size);
+            pos = try file.getPos();
+            header = try ResourceChunk.read(reader);
         }
-        if (pos + header.size >= file_length) break;
-        try file.seekTo(pos + header.size);
-        pos = try file.getPos();
-        header = try ResourceChunk.read(reader);
+
+        return Document{
+            .arena = arena,
+            .string_buf = string_buf,
+            .string_pool = string_pool,
+            .string_pool_header = string_pool_header,
+            .resource_nodes = nodes.toOwnedSlice(),
+            .resource_header = resource_header,
+            .attributes = attributes.toOwnedSlice(),
+        };
     }
 
-    return Document{
-        .string_pool = string_pool,
-        .resource_map = resource_map,
-        .resource_nodes = nodes.toOwnedSlice(),
-    };
-}
+    pub fn write(document: Document, file: std.fs.File) !Document {
+        const writer = file.writer();
+
+        // Write magic bytes
+        try writer.write("\x03\x00\x08\x00");
+
+        // Save a spot for the length
+        try writer.writeInt(u32, 0, .Little);
+
+        // Write the string pool header
+        try document.string_pool_header.write(writer);
+
+        // Write the string offsets
+        for (document.string_pool) |string, i| {
+            // Add index to account for the length values, and then multiply by 2 to get the byte offset
+            try writer.writeInt(u32, @intCast(u32, (string.len + i) * 2), .Little);
+        }
+
+        // Write the strings
+        for (document.string_pool) |string| {
+            try writer.writeInt(u16, @intCast(u16, string.len), .Little);
+            for (string) |char| {
+                try writer.writeInt(u16, char, .Little);
+            }
+        }
+
+        // Write the XML resource chunks
+        for (document.resources_nodes) |node, i| {
+            // Write the header (including the extended bytes)
+            try node.write(writer);
+            // If the node is the start of an element, write out any attributes it may have
+            if (node.extended == .Attribute) {
+                for (document.attribute) |attr| {
+                    if (attr.node == i) {
+                        try attr.value.write(writer);
+                    }
+                }
+            }
+        }
+
+        // Backtrack and write the file size
+        const file_size = file.getEndPos();
+        try file.seekTo(4);
+        try writer.write(file_size);
+    }
+
+    pub fn create() Document {
+        // // Create a header for the string pool
+        // const string_pool_header = StringPool.Header{
+        //     .header = ResourceChunk{
+        //         .sorted = false,
+        //         .utf8 = false,
+        //     },
+        //     .string_count = document.string_pool.len,
+        //     .style_count = 0,
+        //     .flags = StringPool.Flags{},
+        //     .strings_start = document.string_pool.len * 2,
+        //     .styles_start = 0,
+        // };
+    }
+
+    pub fn getString(document: Document, ref: StringPool.Ref) ?[]const u16 {
+        if (ref.index > document.string_pool.len) return null;
+        return document.string_pool[ref.index];
+    }
+};
