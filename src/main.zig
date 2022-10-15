@@ -4,20 +4,24 @@ const testing = std.testing;
 pub const dex = @import("dex.zig");
 pub const ZIP = @import("zip.zig").ZIP;
 pub const binxml = @import("binxml.zig");
+pub const manifest = @import("manifest.zig");
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
 const usage =
     \\USAGE: zandroid <subcommand>
     \\SUBCOMMANDS:
-    \\  zip <file>      Reads a zip file
-    \\  xml <file>      Reads an Android binary XML file
+    \\  zip <file>                  Reads a zip file and lists the contents
+    \\  zip <file> <filename>       Reads the contents of a file from a zip file
+    \\  xml <file>                  Reads an Android binary XML file
+    \\  pkg <manifest> <out>        Creates an APK from a manifest.json
     \\
 ;
 
 const Subcommand = enum {
     zip,
     xml,
+    pkg,
 };
 
 pub fn main() !void {
@@ -38,6 +42,7 @@ pub fn main() !void {
     switch (cmd) {
         .zip => try readZip(alloc, args, stdout),
         .xml => try readXml(alloc, args, stdout),
+        .pkg => try writePackage(alloc),
     }
 }
 
@@ -161,4 +166,45 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
             indent -= 1;
         }
     }
+}
+
+pub fn writePackage(backing_alloc: std.mem.Allocator, args: [][]const u8) !void {
+    // Create an arena allocator
+    var arena = std.heap.ArenaAllocator.init(backing_alloc);
+    const alloc = arena.allocator();
+    defer arena.deinit();
+
+    // Open the manifest.json
+    const manifest_data = manifest: {
+        const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+        const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
+        const dir = try std.fs.openDirAbsolute(dirpath, .{});
+        const file = try dir.openFile(filepath, .{});
+        defer file.close();
+        const data = try file.readToEndAlloc(alloc, 4 * 1024 * 1024);
+        break :manifest data;
+    };
+
+    // Read the manifest and convert it to Android's binary XML format
+    const tokens = try std.json.TokenStream.init(manifest_data);
+    const document = try std.json.parse(manifest.Document, tokens, .{});
+    defer std.json.parseFree(manifest.Document, tokens, .{});
+
+    const bindoc = try binxml.Document.serialize(alloc, document);
+    _ = bindoc;
+
+    // Create files
+    // var records = std.ArrayList().initCapacity(
+    //     alloc,
+    // );
+
+    // Create the zip file
+    // const zip = zip: {
+    //     const outpath = try std.fs.realpathAlloc(alloc, args[3]);
+    //     const dirpath = std.fs.path.dirname(outpath) orelse return error.NonexistentDirectory;
+    //     const dir = try std.fs.openDirAbsolute(dirpath, .{});
+    //     break :zip try dir.openFile(outpath, .{});
+    // };
+
+    // try ZIP.serialize(alloc, document);
 }

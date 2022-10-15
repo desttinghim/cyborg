@@ -1,28 +1,73 @@
+const std = @import("std");
+
+const Pool = std.AutoArrayHashMap([]const u8, void);
+
+pub const Document = struct {
+    namespaces: []const Namespace,
+    root: Node,
+};
+
 pub const Namespace = struct {
     prefix: []const u8,
     uri: []const u8,
+
+    pub fn addToPool(namespace: Namespace, pool: Pool) !usize {
+        try pool.put(namespace.prefix);
+        try pool.put(namespace.uri);
+        return 1;
+    }
 };
 
 pub const Node = union(enum) {
     Element: Element,
     CData: CData,
+
+    pub fn addToPool(node: *Node, pool: Pool) !usize {
+        return switch (node) {
+            .Element => |el| try el.addToPool(pool),
+            .CData => |cdata| try cdata.addToPool(pool),
+        };
+    }
 };
 
 pub const Attribute = struct {
-    namespace: ?Namespace = null,
+    namespace: ?[]const u8 = null,
     name: []const u8,
     value: Value,
+
+    pub fn addToPool(attr: Attribute, pool: Pool) !usize {
+        if (attr.namespace) |ns| _ = ns.addToPool();
+        try pool.put(attr.name);
+        try pool.put(attr.value);
+        return 1;
+    }
 };
 
 pub const Element = struct {
-    namespace: ?Namespace = null,
+    namespace: ?[]const u8 = null,
     name: []const u8,
     attributes: []Attribute = &.{},
     children: []Node = &.{},
+
+    pub fn addToPool(el: Element, pool: Pool) !usize {
+        if (el.namespace) |ns| _ = ns.addToPool();
+        try pool.put(el.name);
+        for (el.attributes) |attribute| {
+            try attribute.addToPool(pool);
+        }
+        for (el.children) |child| {
+            try child.addToPool(pool);
+        }
+        return el.children.len + 1;
+    }
 };
 
 pub const CData = struct {
     value: Value,
+
+    pub fn addToPool(cdata: CData, pool: Pool) !void {
+        try cdata.value.addToPool(pool);
+    }
 };
 
 const Value = union(enum) {
@@ -81,6 +126,13 @@ const Value = union(enum) {
             },
         },
     },
+
+    pub fn addToPool(value: Value, pool: Pool) !void {
+        switch (value) {
+            .String => |str| try pool.put(str),
+            else => {},
+        }
+    }
 };
 
 test "manifest" {

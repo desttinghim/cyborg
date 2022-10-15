@@ -257,6 +257,25 @@ pub const ZIP = struct {
     directory_headers: []CentralDirectoryFileHeader,
     end_record: CentralDirectoryEndRecord,
 
+    pub fn init(file: std.fs.File) !ZIP {
+        return ZIP{
+            .file = file,
+            .directory_headers = &.{},
+            .end_record = CentralDirectoryEndRecord{
+                .stream_pos = 0,
+                .signature = CentralDirectoryEndRecord.SIGNATURE,
+                .disk_number = 0,
+                .central_directory_disk = 0,
+                .record_count = 0,
+                .total_record_count = 0,
+                .directory_size = 0,
+                .directory_offset = 0,
+                .comment_length = 0,
+                .comment = null,
+            },
+        };
+    }
+
     pub fn initFromFile(alloc: std.mem.Allocator, file: std.fs.File) !ZIP {
         var end_record = try CentralDirectoryEndRecord.findEndRecord(file);
 
@@ -267,8 +286,6 @@ pub const ZIP = struct {
         var i: usize = 0;
         while (i < end_record.record_count) : (i += 1) {
             records[i] = try CentralDirectoryFileHeader.read(alloc, reader, try file.getPos());
-            // const varilength = records[i].filename_length + records[i].extra_field_length + records[i].file_comment_length;
-            // try file.seekBy(varilength);
         }
 
         return ZIP{
