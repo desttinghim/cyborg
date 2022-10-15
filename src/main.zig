@@ -42,7 +42,7 @@ pub fn main() !void {
     switch (cmd) {
         .zip => try readZip(alloc, args, stdout),
         .xml => try readXml(alloc, args, stdout),
-        .pkg => try writePackage(alloc),
+        .pkg => try writePackage(alloc, args, stdout),
     }
 }
 
@@ -168,7 +168,7 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     }
 }
 
-pub fn writePackage(backing_alloc: std.mem.Allocator, args: [][]const u8) !void {
+pub fn writePackage(backing_alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
     // Create an arena allocator
     var arena = std.heap.ArenaAllocator.init(backing_alloc);
     const alloc = arena.allocator();
@@ -186,9 +186,12 @@ pub fn writePackage(backing_alloc: std.mem.Allocator, args: [][]const u8) !void 
     };
 
     // Read the manifest and convert it to Android's binary XML format
-    const tokens = try std.json.TokenStream.init(manifest_data);
-    const document = try std.json.parse(manifest.Document, tokens, .{});
-    defer std.json.parseFree(manifest.Document, tokens, .{});
+    var tokens = std.json.TokenStream.init(manifest_data);
+    const document = std.json.parse(manifest.Document, &tokens, .{ .allocator = alloc }) catch |e| {
+        try std.fmt.format(stdout.writer(), "{s}\n", .{@errorName(e)});
+        return;
+    };
+    defer std.json.parseFree(manifest.Document, document, .{ .allocator = alloc });
 
     const bindoc = try binxml.Document.serialize(alloc, document);
     _ = bindoc;

@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Pool = std.AutoArrayHashMap([]const u8, void);
+const Pool = std.StringArrayHashMap(void);
 
 pub const Document = struct {
     namespaces: []const Namespace,
@@ -11,9 +11,9 @@ pub const Namespace = struct {
     prefix: []const u8,
     uri: []const u8,
 
-    pub fn addToPool(namespace: Namespace, pool: Pool) !usize {
-        try pool.put(namespace.prefix);
-        try pool.put(namespace.uri);
+    pub fn addToPool(namespace: Namespace, pool: *Pool) !usize {
+        try pool.put(namespace.prefix, {});
+        try pool.put(namespace.uri, {});
         return 1;
     }
 };
@@ -22,10 +22,10 @@ pub const Node = union(enum) {
     Element: Element,
     CData: CData,
 
-    pub fn addToPool(node: *Node, pool: Pool) !usize {
+    pub fn addToPool(node: Node, pool: *Pool) AddToPoolError!usize {
         return switch (node) {
-            .Element => |el| try el.addToPool(pool),
-            .CData => |cdata| try cdata.addToPool(pool),
+            .Element => |el| el.addToPool(pool),
+            .CData => |cdata| cdata.addToPool(pool),
         };
     }
 };
@@ -35,13 +35,15 @@ pub const Attribute = struct {
     name: []const u8,
     value: Value,
 
-    pub fn addToPool(attr: Attribute, pool: Pool) !usize {
-        if (attr.namespace) |ns| _ = ns.addToPool();
-        try pool.put(attr.name);
-        try pool.put(attr.value);
+    pub fn addToPool(attr: Attribute, pool: *Pool) !usize {
+        if (attr.namespace) |ns| try pool.put(ns, {});
+        try pool.put(attr.name, {});
+        try attr.value.addToPool(pool);
         return 1;
     }
 };
+
+const AddToPoolError = error{OutOfMemory};
 
 pub const Element = struct {
     namespace: ?[]const u8 = null,
@@ -49,31 +51,33 @@ pub const Element = struct {
     attributes: []Attribute = &.{},
     children: []Node = &.{},
 
-    pub fn addToPool(el: Element, pool: Pool) !usize {
-        if (el.namespace) |ns| _ = ns.addToPool();
-        try pool.put(el.name);
+    pub fn addToPool(el: Element, pool: *Pool) AddToPoolError!usize {
+        if (el.namespace) |ns| try pool.put(ns, {});
+        try pool.put(el.name, {});
         for (el.attributes) |attribute| {
-            try attribute.addToPool(pool);
+            _ = try attribute.addToPool(pool);
         }
+        var sum: usize = 1;
         for (el.children) |child| {
-            try child.addToPool(pool);
+            sum += try child.addToPool(pool);
         }
-        return el.children.len + 1;
+        return sum;
     }
 };
 
 pub const CData = struct {
     value: Value,
 
-    pub fn addToPool(cdata: CData, pool: Pool) !void {
+    pub fn addToPool(cdata: CData, pool: *Pool) !usize {
         try cdata.value.addToPool(pool);
+        return 1;
     }
 };
 
 const Value = union(enum) {
     Null: enum { Undefined, Empty },
     Reference: u32,
-    Attribute: Attribute,
+    Attribute: u32,
     String: []const u8,
     Float: f32,
     Dimension: union(enum) {
@@ -127,9 +131,9 @@ const Value = union(enum) {
         },
     },
 
-    pub fn addToPool(value: Value, pool: Pool) !void {
+    pub fn addToPool(value: Value, pool: *Pool) !void {
         switch (value) {
-            .String => |str| try pool.put(str),
+            .String => |str| try pool.put(str, {}),
             else => {},
         }
     }

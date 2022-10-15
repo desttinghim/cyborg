@@ -27,7 +27,7 @@ const ResourceChunk = struct {
     size: u32,
 
     pub fn init(t: Type) ResourceChunk {
-        const header_size = switch (t) {
+        const header_size: u16 = switch (t) {
             .Null => 8,
             .StringPool => 20,
             .Table => 0,
@@ -47,7 +47,7 @@ const ResourceChunk = struct {
             .TableTypeSpec => 0,
             .TableLibrary => 0,
         };
-        const size = switch (t) {
+        const size: u32 = switch (t) {
             .XmlStartNamespace,
             .XmlEndNamespace,
             .XmlEndElement,
@@ -156,10 +156,14 @@ const StringPool = struct {
         pub fn read(reader: anytype) !Ref {
             return Ref{ .index = try reader.readInt(u32, .Little) };
         }
-        pub fn write(ref: Ref, writer: anytype) !void {
-            try writer.write(u32, ref.index, .Little);
+        pub fn write(refe: Ref, writer: anytype) !void {
+            try writer.write(u32, refe.index, .Little);
         }
     };
+
+    pub fn ref(index: usize) Ref {
+        return .{ .index = @intCast(u32, index) };
+    }
 
     const Header = struct {
         header: ResourceChunk,
@@ -195,9 +199,9 @@ const StringPool = struct {
             try writer.writeInt(u32, header.styles_start, .Little);
         }
 
-        pub fn getAlloc(self: Header, alloc: std.mem.Allocator, file: std.fs.File, ref: Ref) !?[]const u16 {
-            if (ref.index == std.math.maxInt(u32)) return null;
-            try file.seekTo(8 + self.header.header_size + ref.index * 4);
+        pub fn getAlloc(self: Header, alloc: std.mem.Allocator, file: std.fs.File, refe: Ref) !?[]const u16 {
+            if (refe.index == std.math.maxInt(u32)) return null;
+            try file.seekTo(8 + self.header.header_size + refe.index * 4);
             const reader = file.reader();
             const offset = try reader.readInt(u32, .Little);
             try file.seekTo(8 + self.strings_start + offset);
@@ -677,7 +681,7 @@ pub const Document = struct {
     pub fn serialize(backing_allocator: std.mem.Allocator, document: manifest.Document) !Document {
         var arena = std.heap.ArenaAllocator.init(backing_allocator);
         const alloc = arena.allocator();
-        var string_set = std.AutoArrayHashMap([]const u8, void).init(alloc);
+        var string_set = std.StringArrayHashMap(void).init(alloc);
         defer string_set.deinit();
         var chunks = std.ArrayList(XMLTree.Node).init(alloc);
         defer chunks.deinit();
@@ -686,19 +690,19 @@ pub const Document = struct {
 
         // Add namespace strings to set
         for (document.namespaces) |ns| {
-            el_accumulator += ns.addToPool(string_set);
+            el_accumulator += try ns.addToPool(&string_set);
         }
 
-        el_accumulator += document.root.addToPool(string_set);
+        el_accumulator += try document.root.addToPool(&string_set);
 
         // Calculate necessary space to build string pool
         const keys = string_set.keys();
-        var lengths = try alloc.alloc(u31, keys.len);
+        var lengths = try alloc.alloc(usize, keys.len);
         defer alloc.free(lengths);
         var sum: usize = 0;
         for (keys) |string, i| {
-            const length = std.unicode.utf8CountCodepoints(string);
-            const lbytes = if (length > 32767) 2 else 1;
+            const length = try std.unicode.utf8CountCodepoints(string);
+            const lbytes: usize = if (length > 32767) 2 else 1;
             sum += lbytes + length;
             lengths[i] = length;
         }
@@ -709,31 +713,31 @@ pub const Document = struct {
         var string_pool = try alloc.alloc([]u16, keys.len);
         for (keys) |string, i| {
             if (lengths[i] > 32767) {
-                string_buf.append(@intCast(u15, lengths[i] >> 16));
-                string_buf.append(@truncate(u16, lengths[i]));
+                try string_buf.append(@intCast(u15, lengths[i] >> 16));
+                try string_buf.append(@truncate(u16, lengths[i]));
             } else {
-                string_buf.append(@intCast(u15, lengths[i]));
+                try string_buf.append(@intCast(u15, lengths[i]));
             }
             const start = string_buf.items.len;
             const encoded = try std.unicode.utf8ToUtf16LeWithNull(alloc, string);
             defer alloc.free(encoded);
-            string_buf.appendSliceAssumeCapacity(string);
+            string_buf.appendSliceAssumeCapacity(encoded);
             const end = string_buf.items.len;
-            string_pool[i] = string_buf[start..end];
+            string_pool[i] = string_buf.items[start..end];
         }
 
         // Create resource chunks
 
         // Create a header for the string pool
         const string_pool_header = StringPool.Header{
-            .header = ResourceChunk{
+            .header = ResourceChunk.init(.StringPool),
+            .string_count = @intCast(u32, string_pool.len),
+            .style_count = 0,
+            .flags = StringPool.Header.Flags{
                 .sorted = false,
                 .utf8 = false,
             },
-            .string_count = string_pool.len,
-            .style_count = 0,
-            .flags = StringPool.Flags{},
-            .strings_start = string_pool.len * 4,
+            .strings_start = @intCast(u32, string_pool.len * 4),
             .styles_start = 0,
         };
 
@@ -744,74 +748,90 @@ pub const Document = struct {
 
         for (document.namespaces) |ns| {
             try nodes.append(XMLTree.Node{
-                .header = ResourceChunk.Header{},
+                .header = ResourceChunk.init(.XmlStartNamespace),
                 .line_number = 0,
-                .comment = string_pool.getIndex("") orelse return error.InvalidString,
+                .comment = StringPool.ref(0xFFFF),
                 .extended = .{ .Namespace = .{
-                    .prefix = string_pool.getIndex(ns.prefix) orelse return error.InvalidString,
-                    .uri = string_pool.getIndex(ns.uri) orelse return error.InvalidString,
+                    .prefix = StringPool.ref(string_set.getIndex(ns.prefix) orelse return error.InvalidString),
+                    .uri = StringPool.ref(string_set.getIndex(ns.uri) orelse return error.InvalidString),
                 } },
             });
         }
 
-        try serialize_recursive(nodes, attributes, document.root, string_pool);
+        try serialize_recursive(&nodes, &attributes, document.root, string_set);
+
+        const namespaces_reversed = try alloc.alloc(manifest.Namespace, document.namespaces.len);
+        std.mem.copy(manifest.Namespace, namespaces_reversed, document.namespaces);
+        std.mem.reverse(manifest.Namespace, namespaces_reversed);
+
+        for (document.namespaces) |ns| {
+            try nodes.append(XMLTree.Node{
+                .header = ResourceChunk.init(.XmlStartNamespace),
+                .line_number = 0,
+                .comment = StringPool.ref(0xFFFF),
+                .extended = .{ .Namespace = .{
+                    .prefix = StringPool.ref(string_set.getIndex(ns.prefix) orelse return error.InvalidString),
+                    .uri = StringPool.ref(string_set.getIndex(ns.uri) orelse return error.InvalidString),
+                } },
+            });
+        }
 
         const resource_header = ResourceChunk.init(.XmlResourceMap);
 
         return Document{
             .arena = arena,
-            .string_buf = string_buf,
+            .string_buf = string_buf.toOwnedSlice(),
             .string_pool = string_pool,
             .string_pool_header = string_pool_header,
             .resource_nodes = nodes.toOwnedSlice(),
-            .resource_header = resource_header,
+            .resource_header = .{ .header = resource_header },
             .attributes = attributes.toOwnedSlice(),
         };
     }
 
-    fn serialize_recursive(nodes: std.ArrayList(XMLTree.Node), attrs: std.ArrayList(XMLTree.Attribute), element: manifest.Node, string_pool: [][]const u16) !void {
+    fn serialize_recursive(nodes: *std.ArrayList(XMLTree.Node), attrs: *std.ArrayList(Attribute), element: manifest.Node, string_set: std.StringArrayHashMap(void)) !void {
         switch (element) {
             .Element => |el| {
                 var start = ResourceChunk.init(.XmlStartElement);
-                start.size += el.attributes.len * 12;
-                const node_id = nodes.len;
+                start.size += @intCast(u32, el.attributes.len * 12);
+                // const node_id = nodes.items.len;
                 // Insert start element
                 try nodes.append(XMLTree.Node{
                     .header = start,
                     .line_number = 0,
-                    .comment = string_pool.getIndex("") orelse return error.InvalidString,
+                    .comment = StringPool.ref(0xFFFF),
                     .extended = .{
                         .Attribute = .{
-                            // .namespace = try StringPool.Ref.read(reader),
-                            // .name = try StringPool.Ref.read(reader),
-                            // .start = try reader.readInt(u16, .Little),
-                            // .size = try reader.readInt(u16, .Little),
-                            // .count = try reader.readInt(u16, .Little),
-                            // .id_index = try reader.readInt(u16, .Little),
-                            // .class_index = try reader.readInt(u16, .Little),
-                            // .style_index = try reader.readInt(u16, .Little),
+                            .namespace = StringPool.ref(string_set.getIndex(el.namespace orelse "") orelse 0xFFFF),
+                            .name = StringPool.ref(string_set.getIndex(el.name) orelse return error.InvalidString),
+                            .start = 0,
+                            .size = 0,
+                            .count = @intCast(u16, el.attributes.len),
+                            .id_index = 0,
+                            .class_index = 0,
+                            .style_index = 0,
                         },
                     },
                 });
                 // Add all attributes
-                for (el.attributes) |attribute| {
-                    try attrs.append(.{ .node = node_id, .value = XMLTree.Attribute{
-                        .namespace = string_pool.getIndex(attribute.namespace) orelse return error.InvalidString,
-                        .name = string_pool.getIndex(attribute.name) orelse return error.InvalidString,
-                        .raw_value = string_pool.getIndex("") orelse return error.InvalidString,
-                        .value = Value.fromManifest(attribute.value),
-                    } });
-                }
+                // for (el.attributes) |attribute| {
+                //     try attrs.append(.{ .node = node_id, .value = XMLTree.Attribute{
+                //         .namespace = StringPool.ref(string_set.getIndex(attribute.namespace orelse "") orelse return error.InvalidString),
+                //         .name = StringPool.ref(string_set.getIndex(attribute.name) orelse return error.InvalidString),
+                //         .raw_value = StringPool.ref(string_set.getIndex("") orelse return error.InvalidString),
+                //         .typed_value = Value.fromManifest(attribute.value),
+                //     } });
+                // }
                 // Recursively add children
-                serialize_recursive(nodes, attrs, el, string_pool);
+                try serialize_recursive(nodes, attrs, .{ .Element = el }, string_set);
                 // Add end tag
                 try nodes.append(XMLTree.Node{
                     .header = ResourceChunk.init(.XmlEndElement),
                     .line_number = 0,
-                    .comment = string_pool.getIndex("") orelse return error.InvalidString,
+                    .comment = StringPool.ref(string_set.getIndex("") orelse return error.InvalidString),
                     .extended = .{ .EndElement = .{
-                        .namespace = string_pool.getIndex(ns.prefix) orelse return error.InvalidString,
-                        .name = string_pool.getIndex(ns.uri) orelse return error.InvalidString,
+                        .namespace = StringPool.ref(string_set.getIndex(el.namespace orelse "") orelse return error.InvalidString),
+                        .name = StringPool.ref(string_set.getIndex(el.name) orelse return error.InvalidString),
                     } },
                 });
             },

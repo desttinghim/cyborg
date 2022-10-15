@@ -1,0 +1,13 @@
+{
+    "namespaces": [
+        {
+            "prefix": "android",
+            "uri": "http://schemas.android.com/apk/res/android"
+        }
+    ],
+    "root": {
+        "name": "manifest",
+        "attributes": [],
+        "children": []
+    }
+}
