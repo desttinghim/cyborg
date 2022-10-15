@@ -294,7 +294,7 @@ pub const ZIP = struct {
                 const reader = zip.file.reader();
                 try zip.file.seekTo(file_record.relative_offset);
                 const local_file = try LocalFileHeader.readHeader(reader, file_record);
-                const slice = try alloc.alloc(u8, local_file.compressed_size);
+                const slice = try alloc.alloc(u8, local_file.uncompressed_size);
                 switch (local_file.compression) {
                     .None => {
                         _ = try reader.read(slice);
