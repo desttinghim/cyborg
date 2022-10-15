@@ -149,11 +149,11 @@ pub const CentralDirectoryFileHeader = struct {
     internal_file_attr: InternalFileAttr,
     external_file_attr: u32,
     relative_offset: u32,
-    filename: ?[]u8,
-    extra_field: ?[]u8,
-    file_comment: ?[]u8,
+    filename: []u8,
+    extra_field: []u8,
+    file_comment: []u8,
 
-    pub fn read(reader: anytype, pos: usize) !CentralDirectoryFileHeader {
+    pub fn read(alloc: std.mem.Allocator, reader: anytype, pos: usize) !CentralDirectoryFileHeader {
         var file_header: CentralDirectoryFileHeader = undefined;
         file_header.pos = pos;
         std.debug.assert(try reader.read(&file_header.signature) == 4);
@@ -174,32 +174,11 @@ pub const CentralDirectoryFileHeader = struct {
         file_header.internal_file_attr = try InternalFileAttr.read(reader);
         file_header.external_file_attr = try reader.readInt(u32, .Little);
         file_header.relative_offset = try reader.readInt(u32, .Little);
-        file_header.filename = null;
-        file_header.extra_field = null;
-        file_header.file_comment = null;
+
+        file_header.filename = try alloc.alloc(u8, file_header.filename_length);
+        file_header.extra_field = try alloc.alloc(u8, file_header.extra_field_length);
+        file_header.file_comment = try alloc.alloc(u8, file_header.file_comment_length);
         return file_header;
-    }
-
-    pub fn getVariableSize(file_header: CentralDirectoryFileHeader) usize {
-        return file_header.filename_length + file_header.extra_field_length + file_header.file_comment_length;
-    }
-
-    pub fn readName(file_header: *CentralDirectoryFileHeader, file: anytype, buffer: []u8) !usize {
-        try file.seekTo(file_header.pos + 46);
-        file_header.filename = buffer;
-        return file.read(buffer[0..file_header.filename_length]);
-    }
-
-    pub fn readExtra(file_header: *CentralDirectoryFileHeader, file: anytype, buffer: []u8) !usize {
-        try file.seekTo(file_header.pos + 46 + file_header.filename_length);
-        file_header.extra_field = buffer;
-        return file.read(buffer[0..file_header.extra_field_length]);
-    }
-
-    pub fn readComment(file_header: *CentralDirectoryFileHeader, file: anytype, buffer: []u8) !usize {
-        try file.seekTo(file_header.pos + 46 + file_header.filename_length + file_header.extra_field_length);
-        file_header.file_comment = buffer;
-        return file.read(buffer[0..file_header.file_comment_length]);
     }
 };
 
@@ -215,6 +194,20 @@ pub const CentralDirectoryEndRecord = struct {
     directory_offset: u32,
     comment_length: u16,
     comment: ?[]u8,
+
+    /// Expects a File
+    pub fn findEndRecord(file: anytype) !CentralDirectoryEndRecord {
+        var i: usize = 22; // minimum possible record size
+        var signature: [4]u8 = undefined;
+        try file.seekTo(try file.getEndPos() - i);
+        _ = try file.read(&signature);
+        if (!std.mem.eql(u8, CentralDirectoryEndRecord.SIGNATURE, &signature)) {
+            return error.CouldntRead;
+        }
+        try file.seekTo(try file.getEndPos() - i);
+        var end_record = CentralDirectoryEndRecord.read(file.reader(), i);
+        return end_record;
+    }
 
     pub fn read(reader: anytype, pos: usize) !CentralDirectoryEndRecord {
         var end_record: CentralDirectoryEndRecord = undefined;
@@ -235,41 +228,29 @@ pub const CentralDirectoryEndRecord = struct {
     pub fn readComment(end_record: *CentralDirectoryEndRecord, reader: anytype, buffer: []u8) !usize {
         return reader.read(buffer[0..end_record.comment_length]);
     }
+};
 
-    /// Expects an EndRecord and a buffer of CentralDirectoryFileHeader's large enough to hold the
-    /// number of records specified in the header
-    pub fn readDirectory(end_record: CentralDirectoryEndRecord, file: anytype, file_buffer: []CentralDirectoryFileHeader) !ZIPDir {
-        std.debug.assert(file_buffer.len >= end_record.record_count);
+pub const ZIP = struct {
+    directory_headers: []CentralDirectoryFileHeader,
+    end_record: CentralDirectoryEndRecord,
+
+    pub fn initFromFile(alloc: std.mem.Allocator, file: std.fs.File) !ZIP {
+        var end_record = try CentralDirectoryEndRecord.findEndRecord(file);
+
+        const records = try alloc.alloc(CentralDirectoryFileHeader, end_record.record_count);
+
         try file.seekTo(end_record.directory_offset);
         const reader = file.reader();
         var i: usize = 0;
         while (i < end_record.record_count) : (i += 1) {
-            file_buffer[i] = try CentralDirectoryFileHeader.read(reader, try file.getPos());
-            const varilength = file_buffer[i].filename_length + file_buffer[i].extra_field_length + file_buffer[i].file_comment_length;
+            records[i] = try CentralDirectoryFileHeader.read(alloc, reader, try file.getPos());
+            const varilength = records[i].filename_length + records[i].extra_field_length + records[i].file_comment_length;
             try file.seekBy(varilength);
         }
-        return ZIPDir{
-            .directory_headers = file_buffer,
+
+        return ZIP{
             .end_record = end_record,
+            .directory_headers = records,
         };
     }
-};
-
-/// Expects a File
-pub fn findEndRecord(file: anytype) !CentralDirectoryEndRecord {
-    var i: usize = 22; // minimum possible record size
-    var signature: [4]u8 = undefined;
-    try file.seekTo(try file.getEndPos() - i);
-    _ = try file.read(&signature);
-    if (!std.mem.eql(u8, CentralDirectoryEndRecord.SIGNATURE, &signature)) {
-        return error.CouldntRead;
-    }
-    try file.seekTo(try file.getEndPos() - i);
-    var end_record = CentralDirectoryEndRecord.read(file.reader(), i);
-    return end_record;
-}
-
-pub const ZIPDir = struct {
-    directory_headers: []CentralDirectoryFileHeader,
-    end_record: CentralDirectoryEndRecord,
 };
