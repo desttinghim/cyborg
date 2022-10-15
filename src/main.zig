@@ -47,17 +47,34 @@ pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    const zip = try ZIP.initFromFile(alloc, file);
+    var zip = try ZIP.initFromFile(alloc, file);
 
-    for (zip.directory_headers) |file_record| {
-        try std.fmt.format(stdout.writer(), "{s:10}{:>10.2}{:>10.2}{:>5} {s}\t{s}\n", .{
-            @tagName(file_record.compression),
-            std.fmt.fmtIntSizeBin(file_record.compressed_size),
-            std.fmt.fmtIntSizeBin(file_record.uncompressed_size),
-            file_record.extra_field_length,
-            file_record.filename,
-            file_record.file_comment,
-        });
+    if (args.len >= 4) {
+        const decompress_file = args[3];
+        if (zip.getFileRecord(decompress_file)) |descriptor| {
+            try std.fmt.format(stdout.writer(), "{s:10}{:>10.2}{:>10.2}{:>5} {s}\t{s}\n", .{
+                @tagName(descriptor.compression),
+                std.fmt.fmtIntSizeBin(descriptor.compressed_size),
+                std.fmt.fmtIntSizeBin(descriptor.uncompressed_size),
+                descriptor.extra_field_length,
+                descriptor.filename,
+                descriptor.file_comment,
+            });
+            if (try zip.getFileAlloc(alloc, decompress_file)) |decompressed| {
+                try std.fmt.format(stdout.writer(), "{s}", .{decompressed});
+            }
+        }
+    } else {
+        for (zip.directory_headers) |file_record| {
+            try std.fmt.format(stdout.writer(), "{s:10}{:>10.2}{:>10.2}{:>5} {s}\t{s}\n", .{
+                @tagName(file_record.compression),
+                std.fmt.fmtIntSizeBin(file_record.compressed_size),
+                std.fmt.fmtIntSizeBin(file_record.uncompressed_size),
+                file_record.extra_field_length,
+                file_record.filename,
+                file_record.file_comment,
+            });
+        }
     }
 }
 

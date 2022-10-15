@@ -72,7 +72,7 @@ pub const DosDate = packed struct(u16) {
 pub const LocalFileHeader = struct {
     const SIGNATURE = "PK\x03\x04";
     signature: [4]u8,
-    version: u16,
+    version: Version,
     flags: GeneralFlags,
     compression: CompressionMethod,
     last_modified_time: DosTime,
@@ -81,9 +81,28 @@ pub const LocalFileHeader = struct {
     compressed_size: u32,
     uncompressed_size: u32,
     filename_length: u16,
-    extrafield_length: u16,
-    filename: []u8,
-    extra_field: []u8,
+    extra_field_length: u16,
+
+    pub fn readHeader(reader: anytype, cd: CentralDirectoryFileHeader) !LocalFileHeader {
+        _ = cd;
+        var file_header: LocalFileHeader = undefined;
+        std.debug.assert(try reader.read(&file_header.signature) == 4);
+        std.debug.assert(std.mem.eql(u8, SIGNATURE, &file_header.signature));
+        file_header.version = try Version.read(reader);
+        file_header.flags = try GeneralFlags.read(reader);
+        file_header.compression = try CompressionMethod.read(reader);
+        file_header.last_modified_time = try DosTime.read(reader);
+        file_header.last_modified_date = try DosDate.read(reader);
+        file_header.crc_32 = try reader.readInt(u32, .Little);
+        file_header.compressed_size = try reader.readInt(u32, .Little);
+        file_header.uncompressed_size = try reader.readInt(u32, .Little);
+        file_header.filename_length = try reader.readInt(u16, .Little);
+        file_header.extra_field_length = try reader.readInt(u16, .Little);
+
+        try reader.skipBytes(file_header.filename_length, .{});
+
+        return file_header;
+    }
 };
 
 pub const System = enum(u8) {
@@ -176,8 +195,11 @@ pub const CentralDirectoryFileHeader = struct {
         file_header.relative_offset = try reader.readInt(u32, .Little);
 
         file_header.filename = try alloc.alloc(u8, file_header.filename_length);
+        _ = try reader.read(file_header.filename);
         file_header.extra_field = try alloc.alloc(u8, file_header.extra_field_length);
+        _ = try reader.read(file_header.extra_field);
         file_header.file_comment = try alloc.alloc(u8, file_header.file_comment_length);
+        _ = try reader.read(file_header.file_comment);
         return file_header;
     }
 };
@@ -231,6 +253,7 @@ pub const CentralDirectoryEndRecord = struct {
 };
 
 pub const ZIP = struct {
+    file: std.fs.File,
     directory_headers: []CentralDirectoryFileHeader,
     end_record: CentralDirectoryEndRecord,
 
@@ -244,13 +267,48 @@ pub const ZIP = struct {
         var i: usize = 0;
         while (i < end_record.record_count) : (i += 1) {
             records[i] = try CentralDirectoryFileHeader.read(alloc, reader, try file.getPos());
-            const varilength = records[i].filename_length + records[i].extra_field_length + records[i].file_comment_length;
-            try file.seekBy(varilength);
+            // const varilength = records[i].filename_length + records[i].extra_field_length + records[i].file_comment_length;
+            // try file.seekBy(varilength);
         }
 
         return ZIP{
+            .file = file,
             .end_record = end_record,
             .directory_headers = records,
         };
+    }
+
+    pub fn getFileRecord(zip: *const ZIP, filename: []const u8) ?CentralDirectoryFileHeader {
+        for (zip.directory_headers) |file_record| {
+            if (std.mem.eql(u8, file_record.filename, filename)) {
+                return file_record;
+            }
+        }
+        return null;
+    }
+
+    /// Returns file with filenam
+    pub fn getFileAlloc(zip: *ZIP, alloc: std.mem.Allocator, filename: []const u8) !?[]const u8 {
+        for (zip.directory_headers) |file_record| {
+            if (std.mem.eql(u8, file_record.filename, filename)) {
+                const reader = zip.file.reader();
+                try zip.file.seekTo(file_record.relative_offset);
+                const local_file = try LocalFileHeader.readHeader(reader, file_record);
+                const slice = try alloc.alloc(u8, local_file.compressed_size);
+                switch (local_file.compression) {
+                    .None => {
+                        _ = try reader.read(slice);
+                    },
+                    .Deflated => {
+                        var decompressor = try std.compress.deflate.decompressor(alloc, reader, null);
+                        defer decompressor.deinit();
+                        _ = try decompressor.read(slice);
+                    },
+                    else => return error.UnimplementedCompressionMethod,
+                }
+                return slice;
+            }
+        }
+        return null;
     }
 };
