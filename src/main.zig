@@ -25,13 +25,22 @@ const Subcommand = enum {
 };
 
 pub fn main() !void {
+    const stdout = std.io.getStdOut();
+    run(stdout) catch |err| {
+        switch (err) {
+            else => |e| {
+                _ = try stdout.write("Error! ");
+                _ = try stdout.write(@errorName(e));
+                _ = try stdout.write("\n");
+            },
+        }
+        _ = try stdout.write(usage);
+    };
+}
+
+pub fn run(stdout: std.fs.File) !void {
     const alloc = gpa.allocator();
     const args = try std.process.argsAlloc(alloc);
-    const stdout = std.io.getStdOut();
-
-    errdefer {
-        _ = stdout.write(usage) catch 0;
-    }
 
     if (args.len < 2) {
         return error.MissingSubcommand;
