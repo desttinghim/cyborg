@@ -7,11 +7,17 @@ pub fn build(b: *std.build.Builder) void {
     // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
 
+    const zig_archive = std.build.Pkg{
+        .name = "archive",
+        .source = .{ .path = "dep/zig-archive/src/main.zig" },
+    };
+
     // Standard release options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
 
     const lib = b.addStaticLibrary("zandroid", "src/main.zig");
+    lib.addPackage(zig_archive);
     lib.setBuildMode(mode);
     lib.install();
 
@@ -22,6 +28,7 @@ pub fn build(b: *std.build.Builder) void {
     test_step.dependOn(&main_tests.step);
 
     const exe = b.addExecutable("zandroid", "src/main.zig");
+    exe.addPackage(zig_archive);
     exe.setBuildMode(mode);
     exe.setTarget(target);
     exe.install();
