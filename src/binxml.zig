@@ -443,6 +443,8 @@ const XMLTree = struct {
 };
 
 const ResourceTable = struct {
+    packages: []Package,
+
     const Header = struct {
         header: ResourceChunk,
         package_count: u32,
@@ -598,8 +600,9 @@ const ResourceTable = struct {
         res0: u8,
         res1: u16,
         entry_count: u32,
+        entries: []u32,
 
-        fn read(reader: anytype, header: ResourceChunk) !TypeSpec {
+        fn read(reader: anytype, header: ResourceChunk, alloc: std.mem.Allocator) !TypeSpec {
             var type_spec: TypeSpec = undefined;
 
             type_spec.header = header;
@@ -607,6 +610,10 @@ const ResourceTable = struct {
             type_spec.res0 = try reader.readInt(u8, .Little);
             type_spec.res1 = try reader.readInt(u16, .Little);
             type_spec.entry_count = try reader.readInt(u32, .Little);
+            type_spec.entries = try alloc.alloc(u32, type_spec.entry_count);
+            for (type_spec.entries) |*entry| {
+                entry.* = try reader.readInt(u32, .Little);
+            }
 
             return type_spec;
         }
@@ -620,8 +627,10 @@ const ResourceTable = struct {
         entry_count: u32,
         entries_start: u32,
         config: Config,
+        entry_indices: []u32,
+        entries: []Entry,
 
-        fn read(reader: anytype, header: ResourceChunk) !TableType {
+        fn read(reader: anytype, header: ResourceChunk, alloc: std.mem.Allocator) !TableType {
             var table_type: TableType = undefined;
 
             table_type.header = header;
@@ -631,6 +640,19 @@ const ResourceTable = struct {
             table_type.entry_count = try reader.readInt(u32, .Little);
             table_type.entries_start = try reader.readInt(u32, .Little);
             table_type.config = try Config.read(reader);
+
+            if (table_type.flags & 0x01 != 0) {
+                // Complex flag
+            } else {
+                table_type.entry_indices = try alloc.alloc(u32, table_type.entry_count);
+                for (table_type.entry_indices) |*entry| {
+                    entry.* = try reader.readInt(u32, .Little);
+                }
+                table_type.entries = try alloc.alloc(Entry, table_type.entry_count);
+                for (table_type.entries) |*entry| {
+                    entry.* = try Entry.read(reader);
+                }
+            }
 
             return table_type;
         }
@@ -646,6 +668,19 @@ const ResourceTable = struct {
         size: u16,
         flags: u16,
         key: StringPool.Ref,
+        value: Value,
+
+        pub fn read(reader: anytype) !Entry {
+            var entry: Entry = undefined;
+
+            entry.size = try reader.readInt(u16, .Little);
+            entry.flags = try reader.readInt(u16, .Little);
+            entry.key = try StringPool.Ref.read(reader);
+            std.debug.assert(entry.flags & 0x0001 == 0);
+            entry.value = try Value.read(reader);
+
+            return entry;
+        }
     };
 
     const TableRef = struct {
@@ -771,11 +806,11 @@ pub const Document = struct {
                     continue;
                 },
                 .TableTypeSpec => {
-                    const table_spec_type = try ResourceTable.TypeSpec.read(reader, header);
+                    const table_spec_type = try ResourceTable.TypeSpec.read(reader, header, alloc);
                     std.log.info("Table spec type: {?}", .{table_spec_type});
                 },
                 .TableType => {
-                    const table_type = try ResourceTable.TableType.read(reader, header);
+                    const table_type = try ResourceTable.TableType.read(reader, header, alloc);
                     std.log.info("Table type: {} {?}", .{ pos, table_type });
                 },
                 .Null => {
