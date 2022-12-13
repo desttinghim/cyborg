@@ -150,6 +150,10 @@ const Value = struct {
 };
 
 const StringPool = struct {
+    header: Header,
+    pool: []u16,
+    slices: [][]u16,
+
     const Ref = struct {
         index: u32,
 
@@ -217,6 +221,38 @@ const StringPool = struct {
             return mem;
         }
     };
+
+    pub fn readAlloc(file: std.fs.File, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !StringPool {
+        const reader = file.reader();
+        const header = try Header.read(reader, chunk_header);
+        const buf_size = (header.header.size - header.strings_start) / 2;
+        const string_buf = try alloc.alloc(u16, buf_size);
+        const string_pool = try alloc.alloc([]u16, header.string_count);
+        // Copy UTF16 buffer into memory
+        try file.seekTo(8 + header.strings_start);
+        for (string_buf) |*char| {
+            char.* = try reader.readInt(u16, .Little);
+        }
+        // Create slices from offsets
+        try file.seekTo(8 + header.header.header_size);
+        for (string_pool) |*string| {
+            const offset = try reader.readInt(u32, .Little);
+            std.debug.assert(offset % 2 == 0);
+            var index = offset / 2;
+            var len: usize = string_buf[index];
+            if (len > 32767) {
+                len = (len & 0b0111_1111) << 16;
+                index += 1;
+                len += string_buf[index];
+            }
+            string.* = string_buf[index + 1 .. index + 1 + len];
+        }
+        return StringPool{
+            .header = header,
+            .pool = string_buf,
+            .slices = string_pool,
+        };
+    }
 
     pub fn read(file: std.fs.File, header: Header, string_buf: []u16, string_pool: [][]const u16) !void {
         const reader = file.reader();
@@ -408,18 +444,53 @@ const ResourceTable = struct {
     const Header = struct {
         header: ResourceChunk,
         package_count: u32,
+
+        fn read(reader: anytype, header: ResourceChunk) !Header {
+            return Header{
+                .header = header,
+                .package_count = try reader.readInt(u32, .Little),
+            };
+        }
     };
 
     const Package = struct {
         header: ResourceChunk,
         id: u32,
+        /// Actual name of package
         name: [127:0]u16,
-        /// Offset to StringPool.Header defining the resource type symbol table.
+        /// Offset to StringPool.Header defining the resource type symbol table. If zero, this package is inheriting
+        /// from another base package.
         type_strings: u32,
+        /// Last index into type_strings that is for public use by others
         last_public_type: u32,
+        /// Offset to a ResStringPool_header defining the resource key symbol table.
         key_strings: u32,
+        /// Last index into keyStrings that is for public use by others
         last_public_key: u32,
         type_id_offset: u32,
+
+        fn read(reader: anytype, header: ResourceChunk) !Package {
+            var package: Package = undefined;
+
+            package.header = header;
+            package.id = try reader.readInt(u32, .Little);
+            var index: usize = 0;
+            package.name[index] = try reader.readInt(u16, .Little);
+            while (package.name[index] != 0) {
+                index += 1;
+                package.name[index] = try reader.readInt(u16, .Little);
+            }
+            std.log.info("{}", .{
+                std.unicode.fmtUtf16le(&package.name),
+            });
+            package.type_strings = try reader.readInt(u32, .Little);
+            package.last_public_type = try reader.readInt(u32, .Little);
+            package.key_strings = try reader.readInt(u32, .Little);
+            package.last_public_key = try reader.readInt(u32, .Little);
+            package.type_id_offset = try reader.readInt(u32, .Little);
+
+            return package;
+        }
     };
 
     const Config = struct {
@@ -547,9 +618,7 @@ const ResourceTable = struct {
 
 pub const Document = struct {
     arena: std.heap.ArenaAllocator,
-    string_buf: []const u16,
-    string_pool: [][]const u16,
-    string_pool_header: StringPool.Header,
+    string_pool: StringPool,
     resource_nodes: []XMLTree.Node,
     resource_header: XMLTree.Header,
     attributes: []Attribute,
@@ -559,9 +628,8 @@ pub const Document = struct {
         value: XMLTree.Attribute,
     };
 
-    pub fn readAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator) !Document {
-        var arena = std.heap.ArenaAllocator.init(backing_allocator);
-        const alloc = arena.allocator();
+    pub fn readXMLAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator) !Document {
+        std.log.info("Reading XML file", .{});
         const reader = file.reader();
 
         var signature: [4]u8 = undefined;
@@ -572,9 +640,20 @@ pub const Document = struct {
 
         const file_length = try reader.readInt(u32, .Little);
 
-        var string_buf: []u16 = undefined;
-        var string_pool: [][]const u16 = undefined;
-        var string_pool_header: StringPool.Header = undefined;
+        return readAlloc(file, backing_allocator, file_length);
+    }
+
+    pub fn readResAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator) !Document {
+        std.log.info("Reading res file", .{});
+        return readAlloc(file, backing_allocator, (try file.metadata()).size());
+    }
+
+    pub fn readAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator, file_length: usize) !Document {
+        const reader = file.reader();
+        var arena = std.heap.ArenaAllocator.init(backing_allocator);
+        const alloc = arena.allocator();
+
+        var string_pool: StringPool = undefined;
         var resource_header: XMLTree.Header = undefined;
         var nodes = std.ArrayList(XMLTree.Node).init(alloc);
         defer nodes.deinit();
@@ -586,11 +665,7 @@ pub const Document = struct {
         while (true) {
             switch (header.type) {
                 .StringPool => {
-                    string_pool_header = try StringPool.Header.read(reader, header);
-                    const buf_size = (pos + header.size - string_pool_header.strings_start) / 2;
-                    string_buf = try alloc.alloc(u16, buf_size);
-                    string_pool = try alloc.alloc([]const u16, string_pool_header.string_count);
-                    try StringPool.read(file, string_pool_header, string_buf, string_pool);
+                    string_pool = try StringPool.readAlloc(file, header, alloc);
                 },
                 .XmlResourceMap => resource_header = XMLTree.Header{ .header = header },
                 .XmlStartNamespace,
@@ -612,9 +687,19 @@ pub const Document = struct {
                         }
                     }
                 },
-                else => break,
+                .Table => {
+                    const table = try ResourceTable.Header.read(reader, header);
+                    std.log.info("Resource table: {?}", .{table});
+                },
+                else => {
+                    std.log.err("Unimplemented chunk type: {s}", .{@tagName(header.type)});
+                    break;
+                },
             }
-            if (pos + header.size >= file_length) break;
+            if (pos + header.size >= file_length) {
+                std.log.err("Next chunk outside of file", .{});
+                break;
+            }
             try file.seekTo(pos + header.size);
             pos = try file.getPos();
             header = try ResourceChunk.read(reader);
@@ -622,9 +707,7 @@ pub const Document = struct {
 
         return Document{
             .arena = arena,
-            .string_buf = string_buf,
             .string_pool = string_pool,
-            .string_pool_header = string_pool_header,
             .resource_nodes = nodes.toOwnedSlice(),
             .resource_header = resource_header,
             .attributes = attributes.toOwnedSlice(),
@@ -677,170 +760,8 @@ pub const Document = struct {
         try writer.write(file_size);
     }
 
-    // Takes the manifest document type and prepares it to be written to a binary XML file
-    pub fn serialize(backing_allocator: std.mem.Allocator, document: manifest.Document) !Document {
-        var arena = std.heap.ArenaAllocator.init(backing_allocator);
-        const alloc = arena.allocator();
-        var string_set = std.StringArrayHashMap(void).init(alloc);
-        defer string_set.deinit();
-        var chunks = std.ArrayList(XMLTree.Node).init(alloc);
-        defer chunks.deinit();
-
-        var el_accumulator: usize = 0;
-
-        // Add namespace strings to set
-        for (document.namespaces) |ns| {
-            el_accumulator += try ns.addToPool(&string_set);
-        }
-
-        el_accumulator += try document.root.addToPool(&string_set);
-
-        // Calculate necessary space to build string pool
-        const keys = string_set.keys();
-        var lengths = try alloc.alloc(usize, keys.len);
-        defer alloc.free(lengths);
-        var sum: usize = 0;
-        for (keys) |string, i| {
-            const length = try std.unicode.utf8CountCodepoints(string);
-            const lbytes: usize = if (length > 32767) 2 else 1;
-            sum += lbytes + length;
-            lengths[i] = length;
-        }
-
-        // Build string pool
-        var string_buf = try std.ArrayList(u16).initCapacity(alloc, sum);
-        defer string_buf.deinit();
-        var string_pool = try alloc.alloc([]u16, keys.len);
-        for (keys) |string, i| {
-            if (lengths[i] > 32767) {
-                try string_buf.append(@intCast(u15, lengths[i] >> 16));
-                try string_buf.append(@truncate(u16, lengths[i]));
-            } else {
-                try string_buf.append(@intCast(u15, lengths[i]));
-            }
-            const start = string_buf.items.len;
-            const encoded = try std.unicode.utf8ToUtf16LeWithNull(alloc, string);
-            defer alloc.free(encoded);
-            string_buf.appendSliceAssumeCapacity(encoded);
-            const end = string_buf.items.len;
-            string_pool[i] = string_buf.items[start..end];
-        }
-
-        // Create resource chunks
-
-        // Create a header for the string pool
-        const string_pool_header = StringPool.Header{
-            .header = ResourceChunk.init(.StringPool),
-            .string_count = @intCast(u32, string_pool.len),
-            .style_count = 0,
-            .flags = StringPool.Header.Flags{
-                .sorted = false,
-                .utf8 = false,
-            },
-            .strings_start = @intCast(u32, string_pool.len * 4),
-            .styles_start = 0,
-        };
-
-        var nodes = try std.ArrayList(XMLTree.Node).initCapacity(alloc, el_accumulator);
-        defer nodes.deinit();
-        var attributes = std.ArrayList(Attribute).init(alloc);
-        defer attributes.deinit();
-
-        for (document.namespaces) |ns| {
-            try nodes.append(XMLTree.Node{
-                .header = ResourceChunk.init(.XmlStartNamespace),
-                .line_number = 0,
-                .comment = StringPool.ref(0xFFFF),
-                .extended = .{ .Namespace = .{
-                    .prefix = StringPool.ref(string_set.getIndex(ns.prefix) orelse return error.InvalidString),
-                    .uri = StringPool.ref(string_set.getIndex(ns.uri) orelse return error.InvalidString),
-                } },
-            });
-        }
-
-        try serialize_recursive(&nodes, &attributes, document.root, string_set);
-
-        const namespaces_reversed = try alloc.alloc(manifest.Namespace, document.namespaces.len);
-        std.mem.copy(manifest.Namespace, namespaces_reversed, document.namespaces);
-        std.mem.reverse(manifest.Namespace, namespaces_reversed);
-
-        for (document.namespaces) |ns| {
-            try nodes.append(XMLTree.Node{
-                .header = ResourceChunk.init(.XmlStartNamespace),
-                .line_number = 0,
-                .comment = StringPool.ref(0xFFFF),
-                .extended = .{ .Namespace = .{
-                    .prefix = StringPool.ref(string_set.getIndex(ns.prefix) orelse return error.InvalidString),
-                    .uri = StringPool.ref(string_set.getIndex(ns.uri) orelse return error.InvalidString),
-                } },
-            });
-        }
-
-        const resource_header = ResourceChunk.init(.XmlResourceMap);
-
-        return Document{
-            .arena = arena,
-            .string_buf = string_buf.toOwnedSlice(),
-            .string_pool = string_pool,
-            .string_pool_header = string_pool_header,
-            .resource_nodes = nodes.toOwnedSlice(),
-            .resource_header = .{ .header = resource_header },
-            .attributes = attributes.toOwnedSlice(),
-        };
-    }
-
-    fn serialize_recursive(nodes: *std.ArrayList(XMLTree.Node), attrs: *std.ArrayList(Attribute), element: manifest.Node, string_set: std.StringArrayHashMap(void)) !void {
-        switch (element) {
-            .Element => |el| {
-                var start = ResourceChunk.init(.XmlStartElement);
-                start.size += @intCast(u32, el.attributes.len * 12);
-                // const node_id = nodes.items.len;
-                // Insert start element
-                try nodes.append(XMLTree.Node{
-                    .header = start,
-                    .line_number = 0,
-                    .comment = StringPool.ref(0xFFFF),
-                    .extended = .{
-                        .Attribute = .{
-                            .namespace = StringPool.ref(string_set.getIndex(el.namespace orelse "") orelse 0xFFFF),
-                            .name = StringPool.ref(string_set.getIndex(el.name) orelse return error.InvalidString),
-                            .start = 0,
-                            .size = 0,
-                            .count = @intCast(u16, el.attributes.len),
-                            .id_index = 0,
-                            .class_index = 0,
-                            .style_index = 0,
-                        },
-                    },
-                });
-                // Add all attributes
-                // for (el.attributes) |attribute| {
-                //     try attrs.append(.{ .node = node_id, .value = XMLTree.Attribute{
-                //         .namespace = StringPool.ref(string_set.getIndex(attribute.namespace orelse "") orelse return error.InvalidString),
-                //         .name = StringPool.ref(string_set.getIndex(attribute.name) orelse return error.InvalidString),
-                //         .raw_value = StringPool.ref(string_set.getIndex("") orelse return error.InvalidString),
-                //         .typed_value = Value.fromManifest(attribute.value),
-                //     } });
-                // }
-                // Recursively add children
-                try serialize_recursive(nodes, attrs, .{ .Element = el }, string_set);
-                // Add end tag
-                try nodes.append(XMLTree.Node{
-                    .header = ResourceChunk.init(.XmlEndElement),
-                    .line_number = 0,
-                    .comment = StringPool.ref(string_set.getIndex("") orelse return error.InvalidString),
-                    .extended = .{ .EndElement = .{
-                        .namespace = StringPool.ref(string_set.getIndex(el.namespace orelse "") orelse return error.InvalidString),
-                        .name = StringPool.ref(string_set.getIndex(el.name) orelse return error.InvalidString),
-                    } },
-                });
-            },
-            .CData => return error.Unimplemented,
-        }
-    }
-
     pub fn getString(document: Document, ref: StringPool.Ref) ?[]const u16 {
-        if (ref.index > document.string_pool.len) return null;
-        return document.string_pool[ref.index];
+        if (ref.index > document.string_pool.slices.len) return null;
+        return document.string_pool.slices[ref.index];
     }
 };

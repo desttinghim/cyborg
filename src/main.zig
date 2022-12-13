@@ -14,14 +14,14 @@ const usage =
     \\  zip <file>                  Reads a zip file and lists the contents
     \\  zip <file> <filename>       Reads the contents of a file from a zip file
     \\  xml <file>                  Reads an Android binary XML file
-    \\  pkg <manifest> <out>        Creates an APK from a manifest.json
+    // \\  pkg <manifest> <out>        Creates an APK from a manifest.json
     \\
 ;
 
 const Subcommand = enum {
     zip,
     xml,
-    pkg,
+    // pkg,
 };
 
 pub fn main() !void {
@@ -51,7 +51,7 @@ pub fn run(stdout: std.fs.File) !void {
     switch (cmd) {
         .zip => try readZip(alloc, args, stdout),
         .xml => try readXml(alloc, args, stdout),
-        .pkg => try writePackage(alloc, args, stdout),
+        // .pkg => try writePackage(alloc, args, stdout),
     }
 }
 
@@ -82,7 +82,10 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    var document = try binxml.Document.readAlloc(file, arena_alloc);
+    var document = if (std.mem.endsWith(u8, filepath, "arsc"))
+        try binxml.Document.readResAlloc(file, arena_alloc)
+    else
+        try binxml.Document.readXMLAlloc(file, arena_alloc);
 
     var indent: usize = 0;
 
@@ -158,46 +161,46 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     }
 }
 
-pub fn writePackage(backing_alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
-    // Create an arena allocator
-    var arena = std.heap.ArenaAllocator.init(backing_alloc);
-    const alloc = arena.allocator();
-    defer arena.deinit();
+// pub fn writePackage(backing_alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+//     // Create an arena allocator
+//     var arena = std.heap.ArenaAllocator.init(backing_alloc);
+//     const alloc = arena.allocator();
+//     defer arena.deinit();
 
-    // Open the manifest.json
-    const manifest_data = manifest: {
-        const filepath = try std.fs.realpathAlloc(alloc, args[2]);
-        const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
-        const dir = try std.fs.openDirAbsolute(dirpath, .{});
-        const file = try dir.openFile(filepath, .{});
-        defer file.close();
-        const data = try file.readToEndAlloc(alloc, 4 * 1024 * 1024);
-        break :manifest data;
-    };
+//     // Open the manifest.json
+//     const manifest_data = manifest: {
+//         const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+//         const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
+//         const dir = try std.fs.openDirAbsolute(dirpath, .{});
+//         const file = try dir.openFile(filepath, .{});
+//         defer file.close();
+//         const data = try file.readToEndAlloc(alloc, 4 * 1024 * 1024);
+//         break :manifest data;
+//     };
 
-    // Read the manifest and convert it to Android's binary XML format
-    var tokens = std.json.TokenStream.init(manifest_data);
-    const document = std.json.parse(manifest.Document, &tokens, .{ .allocator = alloc }) catch |e| {
-        try std.fmt.format(stdout.writer(), "{s}\n", .{@errorName(e)});
-        return;
-    };
-    defer std.json.parseFree(manifest.Document, document, .{ .allocator = alloc });
+//     // Read the manifest and convert it to Android's binary XML format
+//     var tokens = std.json.TokenStream.init(manifest_data);
+//     const document = std.json.parse(manifest.Document, &tokens, .{ .allocator = alloc }) catch |e| {
+//         try std.fmt.format(stdout.writer(), "{s}\n", .{@errorName(e)});
+//         return;
+//     };
+//     defer std.json.parseFree(manifest.Document, document, .{ .allocator = alloc });
 
-    const bindoc = try binxml.Document.serialize(alloc, document);
-    _ = bindoc;
+//     const bindoc = try binxml.Document.serialize(alloc, document);
+//     _ = bindoc;
 
-    // Create files
-    // var records = std.ArrayList().initCapacity(
-    //     alloc,
-    // );
+//     // Create files
+//     // var records = std.ArrayList().initCapacity(
+//     //     alloc,
+//     // );
 
-    // Create the zip file
-    // const zip = zip: {
-    //     const outpath = try std.fs.realpathAlloc(alloc, args[3]);
-    //     const dirpath = std.fs.path.dirname(outpath) orelse return error.NonexistentDirectory;
-    //     const dir = try std.fs.openDirAbsolute(dirpath, .{});
-    //     break :zip try dir.openFile(outpath, .{});
-    // };
+//     // Create the zip file
+//     // const zip = zip: {
+//     //     const outpath = try std.fs.realpathAlloc(alloc, args[3]);
+//     //     const dirpath = std.fs.path.dirname(outpath) orelse return error.NonexistentDirectory;
+//     //     const dir = try std.fs.openDirAbsolute(dirpath, .{});
+//     //     break :zip try dir.openFile(outpath, .{});
+//     // };
 
-    // try ZIP.serialize(alloc, document);
-}
+//     // try ZIP.serialize(alloc, document);
+// }
