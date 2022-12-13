@@ -443,7 +443,60 @@ const XMLTree = struct {
 };
 
 const ResourceTable = struct {
+    string_pool: StringPool,
     packages: []Package,
+
+    pub fn readAlloc(file: std.fs.File, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !ResourceTable {
+        const reader = file.reader();
+        const header = try Header.read(reader, chunk_header);
+
+        var string_pool: StringPool = undefined;
+
+        var packages = try std.ArrayList(ResourceTable.Package).initCapacity(alloc, header.package_count);
+        errdefer packages.deinit();
+
+        var pos: usize = try file.getPos();
+        var package_header = try ResourceChunk.read(reader);
+
+        while (true) {
+            switch (package_header.type) {
+                .StringPool => {
+                    string_pool = try StringPool.readAlloc(file, package_header, alloc);
+                },
+                .TablePackage => {
+                    const table_package_type = try Package.read(file, package_header, alloc);
+                    try packages.append(table_package_type);
+                    try file.seekTo(pos + package_header.header_size);
+                    pos = try file.getPos();
+                    package_header = try ResourceChunk.read(reader);
+                    continue;
+                },
+                .TableTypeSpec => {
+                    const table_spec_type = try ResourceTable.TypeSpec.read(reader, package_header, alloc);
+                    std.log.info("Table spec type: {?}", .{table_spec_type});
+                },
+                .TableType => {
+                    const table_type = try ResourceTable.TableType.read(reader, package_header, alloc);
+                    std.log.info("Table type: {} {?}", .{ pos, table_type });
+                },
+                else => {
+                    return error.InvalidChunkType;
+                },
+            }
+            if (pos + package_header.size >= header.header.size) {
+                std.log.err("Next chunk outside of table: {} + {} = {} > {}", .{ pos, package_header.size, pos + package_header.size, header.header.size });
+                break;
+            }
+            try file.seekTo(pos + package_header.size);
+            pos = try file.getPos();
+            package_header = try ResourceChunk.read(reader);
+        }
+
+        return ResourceTable{
+            .packages = packages.toOwnedSlice(),
+            .string_pool = string_pool,
+        };
+    }
 
     const Header = struct {
         header: ResourceChunk,
@@ -473,7 +526,8 @@ const ResourceTable = struct {
         last_public_key: u32,
         type_id_offset: u32,
 
-        fn read(reader: anytype, header: ResourceChunk, alloc: std.mem.Allocator) !Package {
+        fn read(file: std.fs.File, header: ResourceChunk, alloc: std.mem.Allocator) !Package {
+            const reader = file.reader();
             var package: Package = undefined;
 
             package.header = header;
@@ -713,7 +767,7 @@ pub const Document = struct {
     resource_nodes: []XMLTree.Node,
     resource_header: XMLTree.Header,
     attributes: []Attribute,
-    packages: []ResourceTable.Package,
+    resource_table: ?ResourceTable,
 
     const Attribute = struct {
         node: usize,
@@ -751,8 +805,7 @@ pub const Document = struct {
         defer nodes.deinit();
         var attributes = std.ArrayList(Document.Attribute).init(alloc);
         defer attributes.deinit();
-        var packages = std.ArrayList(ResourceTable.Package).init(alloc);
-        defer packages.deinit();
+        var resource_table: ?ResourceTable = null;
 
         var pos: usize = try file.getPos();
         // var table_header: ?ResourceChunk = null;
@@ -783,24 +836,15 @@ pub const Document = struct {
                     }
                 },
                 .Table => {
-                    const table_header = try ResourceTable.Header.read(reader, header);
-                    std.log.info("Resource table: {?}", .{table_header});
-
-                    pos = try file.getPos();
-                    header = try ResourceChunk.read(reader);
-                    const table_string_pool = try StringPool.readAlloc(file, header, alloc);
-                    std.log.info("Table string pool: {?}", .{table_string_pool});
-
-                    try file.seekTo(pos + header.header_size);
-                    continue;
+                    resource_table = try ResourceTable.readAlloc(file, header, alloc);
                 },
                 .TablePackage => {
-                    const table_package_type = try ResourceTable.Package.read(reader, header, alloc);
-                    try packages.append(table_package_type);
-                    try file.seekTo(pos + header.header_size);
-                    pos = try file.getPos();
-                    header = try ResourceChunk.read(reader);
-                    continue;
+                    // const table_package_type = try ResourceTable.Package.read(reader, header, alloc);
+                    // try packages.append(table_package_type);
+                    // try file.seekTo(pos + header.header_size);
+                    // pos = try file.getPos();
+                    // header = try ResourceChunk.read(reader);
+                    // continue;
                 },
                 .TableTypeSpec => {
                     const table_spec_type = try ResourceTable.TypeSpec.read(reader, header, alloc);
@@ -834,7 +878,7 @@ pub const Document = struct {
             .resource_nodes = nodes.toOwnedSlice(),
             .resource_header = resource_header,
             .attributes = attributes.toOwnedSlice(),
-            .packages = packages.toOwnedSlice(),
+            .resource_table = resource_table,
         };
     }
 
