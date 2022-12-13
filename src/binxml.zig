@@ -228,24 +228,26 @@ const StringPool = struct {
         const buf_size = (header.header.size - header.strings_start) / 2;
         const string_buf = try alloc.alloc(u16, buf_size);
         const string_pool = try alloc.alloc([]u16, header.string_count);
+        // Create slices from offsets
+        for (string_pool) |*string| {
+            const string_buf_int = @ptrToInt(string_buf.ptr);
+            string.ptr = @intToPtr([*]u16, string_buf_int + try reader.readInt(u32, .Little));
+        }
         // Copy UTF16 buffer into memory
-        try file.seekTo(8 + header.strings_start);
+        var current_string: usize = 0;
         for (string_buf) |*char| {
             char.* = try reader.readInt(u16, .Little);
-        }
-        // Create slices from offsets
-        try file.seekTo(8 + header.header.header_size);
-        for (string_pool) |*string| {
-            const offset = try reader.readInt(u32, .Little);
-            std.debug.assert(offset % 2 == 0);
-            var index = offset / 2;
-            var len: usize = string_buf[index];
-            if (len > 32767) {
-                len = (len & 0b0111_1111) << 16;
-                index += 1;
-                len += string_buf[index];
+            if (string_pool.len > current_string and @ptrCast([*]u16, char) == string_pool[current_string].ptr) {
+                var len: usize = char.*;
+                string_pool[current_string].ptr += 1;
+                if (len > 32767) {
+                    len = (len & 0b0111_1111) << 16;
+                    len += try reader.readInt(u16, .Little);
+                    string_pool[current_string].ptr += 1;
+                }
+                string_pool[current_string].len = len;
+                current_string += 1;
             }
-            string.* = string_buf[index + 1 .. index + 1 + len];
         }
         return StringPool{
             .header = header,
@@ -688,8 +690,11 @@ pub const Document = struct {
                     }
                 },
                 .Table => {
-                    const table = try ResourceTable.Header.read(reader, header);
-                    std.log.info("Resource table: {?}", .{table});
+                    const table_header = try ResourceTable.Header.read(reader, header);
+                    std.log.info("Resource table: {?}", .{table_header});
+                    const table_string_pool_header = try ResourceChunk.read(reader);
+                    const table_string_pool = try StringPool.readAlloc(file, table_string_pool_header, alloc);
+                    std.log.info("Table string pool: {?}", .{table_string_pool});
                 },
                 else => {
                     std.log.err("Unimplemented chunk type: {s}", .{@tagName(header.type)});
