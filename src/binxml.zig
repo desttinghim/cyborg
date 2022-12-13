@@ -446,7 +446,7 @@ const ResourceTable = struct {
     string_pool: StringPool,
     packages: []Package,
 
-    pub fn readAlloc(file: std.fs.File, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !ResourceTable {
+    pub fn readAlloc(file: std.fs.File, starting_pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !ResourceTable {
         const reader = file.reader();
         const header = try Header.read(reader, chunk_header);
 
@@ -464,26 +464,14 @@ const ResourceTable = struct {
                     string_pool = try StringPool.readAlloc(file, package_header, alloc);
                 },
                 .TablePackage => {
-                    const table_package_type = try Package.read(file, package_header, alloc);
+                    const table_package_type = try Package.read(file, pos, package_header, alloc);
                     try packages.append(table_package_type);
-                    try file.seekTo(pos + package_header.header_size);
-                    pos = try file.getPos();
-                    package_header = try ResourceChunk.read(reader);
-                    continue;
-                },
-                .TableTypeSpec => {
-                    const table_spec_type = try ResourceTable.TypeSpec.read(reader, package_header, alloc);
-                    std.log.info("Table spec type: {?}", .{table_spec_type});
-                },
-                .TableType => {
-                    const table_type = try ResourceTable.TableType.read(reader, package_header, alloc);
-                    std.log.info("Table type: {} {?}", .{ pos, table_type });
                 },
                 else => {
                     return error.InvalidChunkType;
                 },
             }
-            if (pos + package_header.size >= header.header.size) {
+            if (pos + package_header.size >= starting_pos + header.header.size) {
                 std.log.err("Next chunk outside of table: {} + {} = {} > {}", .{ pos, package_header.size, pos + package_header.size, header.header.size });
                 break;
             }
@@ -526,7 +514,13 @@ const ResourceTable = struct {
         last_public_key: u32,
         type_id_offset: u32,
 
-        fn read(file: std.fs.File, header: ResourceChunk, alloc: std.mem.Allocator) !Package {
+        // Runtime values
+        type_string_pool: StringPool,
+        key_string_pool: StringPool,
+        type_spec: []TypeSpec,
+        table_type: []TableType,
+
+        fn read(file: std.fs.File, starting_pos: usize, header: ResourceChunk, alloc: std.mem.Allocator) !Package {
             const reader = file.reader();
             var package: Package = undefined;
 
@@ -545,6 +539,58 @@ const ResourceTable = struct {
             package.key_strings = try reader.readInt(u32, .Little);
             package.last_public_key = try reader.readInt(u32, .Little);
             package.type_id_offset = try reader.readInt(u32, .Little);
+
+            var type_specs = std.ArrayList(TypeSpec).init(alloc);
+            defer type_specs.deinit();
+
+            var table_types = std.ArrayList(TableType).init(alloc);
+            defer table_types.deinit();
+
+            var type_string_pool: ?StringPool = null;
+            var key_string_pool: ?StringPool = null;
+
+            var pos = starting_pos;
+            try file.seekTo(pos + header.header_size);
+            pos = try file.getPos();
+            var package_header = try ResourceChunk.read(reader);
+            while (true) {
+                switch (package_header.type) {
+                    .StringPool => {
+                        if (type_string_pool == null) {
+                            type_string_pool = try StringPool.readAlloc(file, package_header, alloc);
+                        } else if (key_string_pool == null) {
+                            key_string_pool = try StringPool.readAlloc(file, package_header, alloc);
+                        } else {
+                            return error.TooManyStringPools;
+                        }
+                    },
+                    .TableTypeSpec => {
+                        const table_spec_type = try ResourceTable.TypeSpec.read(reader, package_header, alloc);
+                        try type_specs.append(table_spec_type);
+                        // std.log.info("Table spec type: {?}", .{table_spec_type});
+                    },
+                    .TableType => {
+                        const table_type = try ResourceTable.TableType.read(reader, package_header, alloc);
+                        try table_types.append(table_type);
+                        // std.log.info("Table type: {} {?}", .{ pos, table_type });
+                    },
+                    else => {
+                        std.log.info("Found {s} while parsing package", .{@tagName(package_header.type)});
+                        return error.InvalidChunkType;
+                    },
+                }
+                if (pos + package_header.size >= starting_pos + header.size) {
+                    std.log.err("Next chunk outside of package: {} + {} = {} > {}", .{ pos, package_header.size, pos + package_header.size, starting_pos + header.size });
+                    break;
+                }
+                try file.seekTo(pos + package_header.size);
+                pos = try file.getPos();
+                package_header = try ResourceChunk.read(reader);
+            }
+            package.type_string_pool = type_string_pool orelse return error.MissingTypeStringPool;
+            package.key_string_pool = key_string_pool orelse return error.MissingKeyStringPool;
+            package.type_spec = type_specs.toOwnedSlice();
+            package.table_type = table_types.toOwnedSlice();
 
             return package;
         }
@@ -653,7 +699,9 @@ const ResourceTable = struct {
         res0: u8,
         res1: u16,
         entry_count: u32,
-        entries: []u32,
+
+        entry_indices: []u32,
+        // entries: []TableType,
 
         fn read(reader: anytype, header: ResourceChunk, alloc: std.mem.Allocator) !TypeSpec {
             var type_spec: TypeSpec = undefined;
@@ -663,10 +711,16 @@ const ResourceTable = struct {
             type_spec.res0 = try reader.readInt(u8, .Little);
             type_spec.res1 = try reader.readInt(u16, .Little);
             type_spec.entry_count = try reader.readInt(u32, .Little);
-            type_spec.entries = try alloc.alloc(u32, type_spec.entry_count);
-            for (type_spec.entries) |*entry| {
+
+            type_spec.entry_indices = try alloc.alloc(u32, type_spec.entry_count);
+            for (type_spec.entry_indices) |*entry| {
                 entry.* = try reader.readInt(u32, .Little);
             }
+            // type_spec.entries = try alloc.alloc(TableType, type_spec.entry_count);
+            // for (type_spec.entries) |*entry| {
+            //     const type_header = try ResourceChunk.read(reader);
+            //     entry.* = try TableType.read(reader, type_header, alloc);
+            // }
 
             return type_spec;
         }
@@ -700,10 +754,12 @@ const ResourceTable = struct {
                 table_type.entry_indices = try alloc.alloc(u32, table_type.entry_count);
                 for (table_type.entry_indices) |*entry| {
                     entry.* = try reader.readInt(u32, .Little);
+                    std.log.info("table type {}", .{entry.*});
                 }
                 table_type.entries = try alloc.alloc(Entry, table_type.entry_count);
                 for (table_type.entries) |*entry| {
                     entry.* = try Entry.read(reader);
+                    std.log.info("table type {}: {?}", .{ entry.key, entry.value });
                 }
             }
 
@@ -721,7 +777,7 @@ const ResourceTable = struct {
         size: u16,
         flags: u16,
         key: StringPool.Ref,
-        value: Value,
+        value: ?Value,
 
         pub fn read(reader: anytype) !Entry {
             var entry: Entry = undefined;
@@ -729,8 +785,12 @@ const ResourceTable = struct {
             entry.size = try reader.readInt(u16, .Little);
             entry.flags = try reader.readInt(u16, .Little);
             entry.key = try StringPool.Ref.read(reader);
-            std.debug.assert(entry.flags & 0x0001 == 0);
-            entry.value = try Value.read(reader);
+            if (entry.size > 8) {
+                std.debug.assert(entry.flags & 0x0001 == 0);
+                entry.value = try Value.read(reader);
+            } else {
+                entry.value = null;
+            }
 
             return entry;
         }
@@ -836,7 +896,7 @@ pub const Document = struct {
                     }
                 },
                 .Table => {
-                    resource_table = try ResourceTable.readAlloc(file, header, alloc);
+                    resource_table = try ResourceTable.readAlloc(file, pos, header, alloc);
                 },
                 .TablePackage => {
                     // const table_package_type = try ResourceTable.Package.read(reader, header, alloc);

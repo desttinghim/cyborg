@@ -170,6 +170,19 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
                 package.last_public_key,
                 package.type_id_offset,
             });
+            for (package.type_spec) |type_spec| {
+                try std.fmt.format(stdout.writer(), "\tType Spec {}\n", .{type_spec.id});
+                for (type_spec.entry_indices) |*entry| {
+                    try std.fmt.format(stdout.writer(), "\t\t{}\n", .{entry.*});
+                }
+            }
+            for (package.table_type) |table_type| {
+                try std.fmt.format(stdout.writer(), "\tTable Type {}, {}\n", .{ table_type.id, table_type.flags });
+                // try std.fmt.format(stdout.writer(), "\t\tConfig: {}\n", .{table_type.config});
+                for (table_type.entries) |*entry| {
+                    try std.fmt.format(stdout.writer(), "\t\t{}: {?}\n", .{ std.unicode.fmtUtf16le(package.key_string_pool.slices[entry.key.index]), entry.value });
+                }
+            }
         }
     }
 }
