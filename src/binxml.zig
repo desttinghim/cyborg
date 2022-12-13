@@ -483,7 +483,7 @@ const ResourceTable = struct {
                 package.name[index] = try reader.readInt(u16, .Little);
             }
             std.log.info("{}", .{
-                std.unicode.fmtUtf16le(&package.name),
+                std.unicode.fmtUtf16le(package.name[0..index]),
             });
             package.type_strings = try reader.readInt(u32, .Little);
             package.last_public_type = try reader.readInt(u32, .Little);
@@ -495,22 +495,21 @@ const ResourceTable = struct {
         }
     };
 
-    const Config = struct {
-        size: u32,
-        imsi: packed struct(u32) {
+    const Config = extern struct {
+        const Imsi = packed struct(u32) {
             mcc: u16,
             mnc: u16,
-        },
-        locale: packed struct(u32) {
-            language: [2]u8,
-            country: [2]u8,
-        },
-        screen_type: packed struct(u32) {
+        };
+        const Locale = packed struct(u32) {
+            language: u16,
+            country: u16,
+        };
+        const ScreenType = packed struct(u32) {
             orientation: enum(u8) { Any = 0, Port = 1, Land = 2, Square = 3 },
             touchscreen: enum(u8) { Any = 0, NoTouch = 1, Stylus = 2, Finger = 3 },
             density: enum(u16) { Default = 0, Low = 120, Medium = 160, Tv = 213, High = 240, XHigh = 320, XXHigh = 480, XXXHigh = 640, Any = 0xFFFE, None = 0xFFFF },
-        },
-        input: packed struct(u32) {
+        };
+        const Input = packed struct(u32) {
             keyboard: enum(u8) { Any = 0, NoKeys = 1, Qwerty = 2, _12Key = 3 },
             navigation: enum(u8) { Any = 0, NoNav = 1, Dpad = 2, Trackball = 3, Wheel = 4 },
             input_flags: packed struct(u8) {
@@ -519,16 +518,16 @@ const ResourceTable = struct {
                 _unused: u4,
             },
             input_pad: u8,
-        },
-        screen_size: packed struct(u32) {
+        };
+        const ScreenSize = packed struct(u32) {
             width: enum(u16) { Any = 0, _ },
             height: enum(u16) { Any = 0, _ },
-        },
-        version: packed struct(u32) {
+        };
+        const Version = packed struct(u32) {
             sdk: enum(u16) { Any = 0, _ },
             minor: enum(u16) { Any = 0, _ }, // must be 0, meaning is undefined
-        },
-        screen_config: packed struct(u32) {
+        };
+        const ScreenConfig = packed struct(u32) {
             layout: packed struct(u8) {
                 size: enum(u4) { Any = 0, Small = 1, Normal = 2, Large = 3, XLarge = 4 },
                 long: enum(u2) { Any = 0, No = 1, Yes = 2 },
@@ -540,14 +539,12 @@ const ResourceTable = struct {
                 _unused: u2,
             },
             smallest_screen_width_dp: u16,
-        },
-        screen_size_dp: packed struct(u32) {
+        };
+        const ScreenSizeDp = packed struct(u32) {
             width: u16,
             height: u16,
-        },
-        locale_script: [4]u8,
-        locale_version: [8]u8,
-        screen_config2: packed struct(u32) {
+        };
+        const ScreenConfig2 = packed struct(u32) {
             layout2: packed struct(u8) {
                 round: enum(u2) { Any = 0, No = 1, Yes = 2 },
                 _unused: u6,
@@ -558,9 +555,41 @@ const ResourceTable = struct {
                 _unused: u4,
             },
             _pad: u16,
-        },
+        };
+        size: u32,
+        imsi: Imsi,
+        locale: Locale,
+        screen_type: ScreenType,
+        input: Input,
+        screen_size: ScreenSize,
+        version: Version,
+        screen_config: ScreenConfig,
+        screen_size_dp: ScreenSizeDp,
+        locale_script: [4]u8,
+        locale_version: [8]u8,
+        screen_config2: ScreenConfig2,
         locale_script_was_computed: bool,
         locale_numbering_system: [8]u8,
+
+        fn read(reader: anytype) !Config {
+            var config: Config = undefined;
+
+            config.size = try reader.readInt(u32, .Little);
+            std.debug.assert(config.size == @sizeOf(Config));
+            config.imsi = @bitCast(Imsi, try reader.readInt(u32, .Little));
+            config.locale = @bitCast(Locale, try reader.readInt(u32, .Little));
+            config.screen_type = @bitCast(ScreenType, try reader.readInt(u32, .Little));
+            config.input = @bitCast(Input, try reader.readInt(u32, .Little));
+            config.screen_size = @bitCast(ScreenSize, try reader.readInt(u32, .Little));
+            config.version = @bitCast(Version, try reader.readInt(u32, .Little));
+            config.screen_config = @bitCast(ScreenConfig, try reader.readInt(u32, .Little));
+            config.screen_size_dp = @bitCast(ScreenSizeDp, try reader.readInt(u32, .Little));
+            _ = try reader.read(&config.locale_script);
+            _ = try reader.read(&config.locale_version);
+            config.screen_config2 = @bitCast(ScreenConfig2, try reader.readInt(u32, .Little));
+
+            return config;
+        }
     };
 
     const TypeSpec = struct {
@@ -569,16 +598,42 @@ const ResourceTable = struct {
         res0: u8,
         res1: u16,
         entry_count: u32,
+
+        fn read(reader: anytype, header: ResourceChunk) !TypeSpec {
+            var type_spec: TypeSpec = undefined;
+
+            type_spec.header = header;
+            type_spec.id = try reader.readInt(u8, .Little);
+            type_spec.res0 = try reader.readInt(u8, .Little);
+            type_spec.res1 = try reader.readInt(u16, .Little);
+            type_spec.entry_count = try reader.readInt(u32, .Little);
+
+            return type_spec;
+        }
     };
 
-    const Type = struct {
+    const TableType = struct {
         header: ResourceChunk,
         id: u8,
         flags: u8,
-        reserved: u8,
+        reserved: u16,
         entry_count: u32,
         entries_start: u32,
         config: Config,
+
+        fn read(reader: anytype, header: ResourceChunk) !TableType {
+            var table_type: TableType = undefined;
+
+            table_type.header = header;
+            table_type.id = try reader.readInt(u8, .Little);
+            table_type.flags = try reader.readInt(u8, .Little);
+            table_type.reserved = try reader.readInt(u16, .Little);
+            table_type.entry_count = try reader.readInt(u32, .Little);
+            table_type.entries_start = try reader.readInt(u32, .Little);
+            table_type.config = try Config.read(reader);
+
+            return table_type;
+        }
     };
 
     const SparseTypeEntry = struct {
@@ -663,6 +718,7 @@ pub const Document = struct {
         defer attributes.deinit();
 
         var pos: usize = try file.getPos();
+        // var table_header: ?ResourceChunk = null;
         var header = try ResourceChunk.read(reader);
         while (true) {
             switch (header.type) {
@@ -692,9 +748,39 @@ pub const Document = struct {
                 .Table => {
                     const table_header = try ResourceTable.Header.read(reader, header);
                     std.log.info("Resource table: {?}", .{table_header});
-                    const table_string_pool_header = try ResourceChunk.read(reader);
-                    const table_string_pool = try StringPool.readAlloc(file, table_string_pool_header, alloc);
+
+                    pos = try file.getPos();
+                    header = try ResourceChunk.read(reader);
+                    const table_string_pool = try StringPool.readAlloc(file, header, alloc);
                     std.log.info("Table string pool: {?}", .{table_string_pool});
+
+                    // pos = try file.getPos();
+                    // header = try ResourceChunk.read(reader);
+                    // const table_package_type = try ResourceTable.Package.read(reader, header);
+                    // std.log.info("Table package type: {?}", .{table_package_type});
+
+                    try file.seekTo(pos + header.header_size);
+                    continue;
+                },
+                .TablePackage => {
+                    const table_package_type = try ResourceTable.Package.read(reader, header);
+                    std.log.info("Table package type: {?}", .{table_package_type});
+                    try file.seekTo(pos + header.header_size);
+                    pos = try file.getPos();
+                    header = try ResourceChunk.read(reader);
+                    continue;
+                },
+                .TableTypeSpec => {
+                    const table_spec_type = try ResourceTable.TypeSpec.read(reader, header);
+                    std.log.info("Table spec type: {?}", .{table_spec_type});
+                },
+                .TableType => {
+                    const table_type = try ResourceTable.TableType.read(reader, header);
+                    std.log.info("Table type: {} {?}", .{ pos, table_type });
+                },
+                .Null => {
+                    std.log.err("Encountered null chunk {}, {?}", .{ pos, header });
+                    if (header.header_size == 0) return error.MalformedNullChunk;
                 },
                 else => {
                     std.log.err("Unimplemented chunk type: {s}", .{@tagName(header.type)});
@@ -702,7 +788,7 @@ pub const Document = struct {
                 },
             }
             if (pos + header.size >= file_length) {
-                std.log.err("Next chunk outside of file", .{});
+                std.log.err("Next chunk outside of file: {} + {} = {} > {}", .{ pos, header.size, pos + header.size, file_length });
                 break;
             }
             try file.seekTo(pos + header.size);
