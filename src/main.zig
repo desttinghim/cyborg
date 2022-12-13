@@ -159,6 +159,17 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
             indent -= 1;
         }
     }
+
+    for (document.packages) |package| {
+        try std.fmt.format(stdout.writer(), "Package {} (ID {})\n", .{ std.unicode.fmtUtf16le(package.name), package.id });
+        try std.fmt.format(stdout.writer(), "\tType Strings {}\n\tLast Public Type {}\n\tKey Strings {}\n\tLast Public Key {}\n\tType ID Offset {}\n", .{
+            package.type_strings,
+            package.last_public_type,
+            package.key_strings,
+            package.last_public_key,
+            package.type_id_offset,
+        });
+    }
 }
 
 // pub fn writePackage(backing_alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {

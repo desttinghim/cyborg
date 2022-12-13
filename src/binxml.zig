@@ -461,7 +461,7 @@ const ResourceTable = struct {
         header: ResourceChunk,
         id: u32,
         /// Actual name of package
-        name: [127:0]u16,
+        name: []const u16,
         /// Offset to StringPool.Header defining the resource type symbol table. If zero, this package is inheriting
         /// from another base package.
         type_strings: u32,
@@ -473,20 +473,19 @@ const ResourceTable = struct {
         last_public_key: u32,
         type_id_offset: u32,
 
-        fn read(reader: anytype, header: ResourceChunk) !Package {
+        fn read(reader: anytype, header: ResourceChunk, alloc: std.mem.Allocator) !Package {
             var package: Package = undefined;
 
             package.header = header;
             package.id = try reader.readInt(u32, .Little);
+            var name: [127:0]u16 = undefined;
             var index: usize = 0;
-            package.name[index] = try reader.readInt(u16, .Little);
-            while (package.name[index] != 0) {
+            name[index] = try reader.readInt(u16, .Little);
+            while (name[index] != 0) {
                 index += 1;
-                package.name[index] = try reader.readInt(u16, .Little);
+                name[index] = try reader.readInt(u16, .Little);
             }
-            std.log.info("{}", .{
-                std.unicode.fmtUtf16le(package.name[0..index]),
-            });
+            package.name = try alloc.dupe(u16, name[0..index]);
             package.type_strings = try reader.readInt(u32, .Little);
             package.last_public_type = try reader.readInt(u32, .Little);
             package.key_strings = try reader.readInt(u32, .Little);
@@ -714,6 +713,7 @@ pub const Document = struct {
     resource_nodes: []XMLTree.Node,
     resource_header: XMLTree.Header,
     attributes: []Attribute,
+    packages: []ResourceTable.Package,
 
     const Attribute = struct {
         node: usize,
@@ -751,6 +751,8 @@ pub const Document = struct {
         defer nodes.deinit();
         var attributes = std.ArrayList(Document.Attribute).init(alloc);
         defer attributes.deinit();
+        var packages = std.ArrayList(ResourceTable.Package).init(alloc);
+        defer packages.deinit();
 
         var pos: usize = try file.getPos();
         // var table_header: ?ResourceChunk = null;
@@ -789,17 +791,12 @@ pub const Document = struct {
                     const table_string_pool = try StringPool.readAlloc(file, header, alloc);
                     std.log.info("Table string pool: {?}", .{table_string_pool});
 
-                    // pos = try file.getPos();
-                    // header = try ResourceChunk.read(reader);
-                    // const table_package_type = try ResourceTable.Package.read(reader, header);
-                    // std.log.info("Table package type: {?}", .{table_package_type});
-
                     try file.seekTo(pos + header.header_size);
                     continue;
                 },
                 .TablePackage => {
-                    const table_package_type = try ResourceTable.Package.read(reader, header);
-                    std.log.info("Table package type: {?}", .{table_package_type});
+                    const table_package_type = try ResourceTable.Package.read(reader, header, alloc);
+                    try packages.append(table_package_type);
                     try file.seekTo(pos + header.header_size);
                     pos = try file.getPos();
                     header = try ResourceChunk.read(reader);
@@ -837,6 +834,7 @@ pub const Document = struct {
             .resource_nodes = nodes.toOwnedSlice(),
             .resource_header = resource_header,
             .attributes = attributes.toOwnedSlice(),
+            .packages = packages.toOwnedSlice(),
         };
     }
 
