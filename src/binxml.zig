@@ -842,11 +842,15 @@ pub const Document = struct {
         const count = try reader.read(&signature);
         if (count != 4) return error.UnexpectedEof;
 
-        if (!std.mem.eql(u8, &signature, "\x03\x00\x08\x00")) return error.WrongMagicBytes;
+        if (!std.mem.eql(u8, &signature, "\x03\x00\x08\x00")) {
+            const file_length = try reader.readInt(u32, .Little);
 
-        const file_length = try reader.readInt(u32, .Little);
-
-        return readAlloc(file, backing_allocator, file_length);
+            return readAlloc(file, backing_allocator, file_length);
+        } else {
+            const file_length = try file.getEndPos();
+            try file.seekTo(0);
+            return readAlloc(file, backing_allocator, file_length);
+        }
     }
 
     pub fn readResAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator) !Document {
@@ -874,6 +878,14 @@ pub const Document = struct {
             switch (header.type) {
                 .StringPool => {
                     string_pool = try StringPool.readAlloc(file, header, alloc);
+                },
+                .Xml => {
+                    std.log.info("XML Header: {}", .{header});
+                    // Go to body
+                    try file.seekTo(pos + header.header_size);
+                    pos = try file.getPos();
+                    header = try ResourceChunk.read(reader);
+                    continue;
                 },
                 .XmlResourceMap => resource_header = XMLTree.Header{ .header = header },
                 .XmlStartNamespace,
