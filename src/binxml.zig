@@ -230,29 +230,32 @@ const StringPool = struct {
     pub fn readAlloc(file: std.fs.File, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !StringPool {
         const reader = file.reader();
         const header = try Header.read(reader, chunk_header);
-        const buf_size = (header.header.size - header.strings_start) / 2;
+        const buf_size = (header.header.size - header.header.header_size) / 2;
         const string_buf = try alloc.alloc(u16, buf_size);
-        const string_pool = try alloc.alloc([]u16, header.string_count);
+
+        const string_offset = try alloc.alloc(usize, header.string_count);
+        defer alloc.free(string_offset);
+
         // Create slices from offsets
-        for (string_pool) |*string| {
-            const string_buf_int = @ptrToInt(string_buf.ptr);
-            string.ptr = @intToPtr([*]u16, string_buf_int + try reader.readInt(u32, .Little));
+        for (string_offset) |*offset| {
+            offset.* = try reader.readInt(u32, .Little);
         }
         // Copy UTF16 buffer into memory
-        var current_string: usize = 0;
         for (string_buf) |*char| {
             char.* = try reader.readInt(u16, .Little);
-            if (string_pool.len > current_string and @ptrCast([*]u16, char) == string_pool[current_string].ptr) {
-                var len: usize = char.*;
-                string_pool[current_string].ptr += 1;
-                if (len > 32767) {
-                    len = (len & 0b0111_1111) << 16;
-                    len += try reader.readInt(u16, .Little);
-                    string_pool[current_string].ptr += 1;
-                }
-                string_pool[current_string].len = len;
-                current_string += 1;
+        }
+        // Construct slices
+        const string_pool = try alloc.alloc([]u16, header.string_count);
+        for (string_offset) |offset, i| {
+            var buf_index = offset / 2;
+            var len: usize = string_buf[buf_index];
+            var add_index: usize = 1;
+            if (len > 32767) {
+                len = (len & 0b0111_1111) << 16;
+                len += string_buf[buf_index + add_index];
+                add_index += 1;
             }
+            string_pool[i] = string_buf[buf_index + add_index .. buf_index + add_index + len];
         }
         return StringPool{
             .header = header,
@@ -322,10 +325,10 @@ const XMLTree = struct {
                 .XmlStartNamespace,
                 .XmlEndElement,
                 .XmlEndNamespace,
-                => try nodes.append(try XMLTree.Node.read(reader, header)),
+                => try nodes.append(try XMLTree.Node.read(reader, resource_header)),
                 .XmlStartElement => {
                     var node_id = nodes.items.len;
-                    var node = try XMLTree.Node.read(reader, header);
+                    var node = try XMLTree.Node.read(reader, resource_header);
                     try nodes.append(node);
                     var attribute = node.extended.Attribute;
                     if (attribute.count > 0) {
@@ -337,7 +340,12 @@ const XMLTree = struct {
                         }
                     }
                 },
+                .XmlResourceMap => {
+                    // Skip for now
+                    // TODO
+                },
                 else => {
+                    std.log.info("xmltree unexpected chunk {}", .{resource_header});
                     return error.InvalidChunkType;
                 },
             }
@@ -353,8 +361,8 @@ const XMLTree = struct {
         return XMLTree{
             .header = header,
             .string_pool = string_pool,
-            .nodes = nodes.toOwnedSlice(),
-            .attributes = attributes.toOwnedSlice(),
+            .nodes = try nodes.toOwnedSlice(),
+            .attributes = try attributes.toOwnedSlice(),
         };
     }
 
@@ -380,7 +388,10 @@ const XMLTree = struct {
                     .XmlCData => .{ .CData = try CDataExtended.read(reader) },
                     .XmlEndElement => .{ .EndElement = try EndElementExtended.read(reader) },
                     .XmlStartElement => .{ .Attribute = try AttributeExtended.read(reader) },
-                    else => @panic("not an xml element"),
+                    else => {
+                        std.log.info("not an xml element, {}", .{header});
+                        return error.UnexpectedChunk;
+                    },
                 },
             };
         }
@@ -553,7 +564,7 @@ const ResourceTable = struct {
         }
 
         return ResourceTable{
-            .packages = packages.toOwnedSlice(),
+            .packages = try packages.toOwnedSlice(),
             .string_pool = string_pool,
         };
     }
@@ -661,8 +672,8 @@ const ResourceTable = struct {
             }
             package.type_string_pool = type_string_pool orelse return error.MissingTypeStringPool;
             package.key_string_pool = key_string_pool orelse return error.MissingKeyStringPool;
-            package.type_spec = type_specs.toOwnedSlice();
-            package.table_type = table_types.toOwnedSlice();
+            package.type_spec = try type_specs.toOwnedSlice();
+            package.table_type = try table_types.toOwnedSlice();
 
             return package;
         }
@@ -939,8 +950,8 @@ pub const Document = struct {
 
         return Document{
             .arena = arena,
-            .xml_trees = xml_trees.toOwnedSlice(),
-            .tables = tables.toOwnedSlice(),
+            .xml_trees = try xml_trees.toOwnedSlice(),
+            .tables = try tables.toOwnedSlice(),
         };
     }
 
