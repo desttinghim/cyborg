@@ -82,10 +82,7 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    var document = if (std.mem.endsWith(u8, filepath, "arsc"))
-        try binxml.Document.readResAlloc(file, arena_alloc)
-    else
-        try binxml.Document.readXMLAlloc(file, arena_alloc);
+    var document = try binxml.Document.readAlloc(file, arena_alloc);
 
     var indent: usize = 0;
 

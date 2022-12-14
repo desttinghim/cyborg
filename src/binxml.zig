@@ -834,32 +834,20 @@ pub const Document = struct {
         value: XMLTree.Attribute,
     };
 
-    pub fn readXMLAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator) !Document {
-        std.log.info("Reading XML file", .{});
+    pub fn readAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator) !Document {
         const reader = file.reader();
 
         var signature: [4]u8 = undefined;
         const count = try reader.read(&signature);
         if (count != 4) return error.UnexpectedEof;
 
-        if (!std.mem.eql(u8, &signature, "\x03\x00\x08\x00")) {
-            const file_length = try reader.readInt(u32, .Little);
-
-            return readAlloc(file, backing_allocator, file_length);
-        } else {
-            const file_length = try file.getEndPos();
+        const file_length = if (!std.mem.eql(u8, &signature, "\x03\x00\x08\x00"))
+            try reader.readInt(u32, .Little)
+        else file_length: {
             try file.seekTo(0);
-            return readAlloc(file, backing_allocator, file_length);
-        }
-    }
+            break :file_length try file.getEndPos();
+        };
 
-    pub fn readResAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator) !Document {
-        std.log.info("Reading res file", .{});
-        return readAlloc(file, backing_allocator, (try file.metadata()).size());
-    }
-
-    pub fn readAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator, file_length: usize) !Document {
-        const reader = file.reader();
         var arena = std.heap.ArenaAllocator.init(backing_allocator);
         const alloc = arena.allocator();
 
