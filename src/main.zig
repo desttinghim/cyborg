@@ -86,78 +86,80 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 
     var indent: usize = 0;
 
-    for (document.resource_nodes) |node, node_id| {
-        if (node.extended == .Attribute) {
-            indent += 1;
-        }
-        var iloop: usize = 1;
-        while (iloop < indent) : (iloop += 1) {
-            try std.fmt.format(stdout, "\t", .{});
-        }
-        switch (node.extended) {
-            .CData => |cdata| {
-                const data = document.getString(cdata.data) orelse &[_]u16{};
+    for (document.xml_trees) |xml_tree| {
+        for (xml_tree.nodes) |node, node_id| {
+            if (node.extended == .Attribute) {
+                indent += 1;
+            }
+            var iloop: usize = 1;
+            while (iloop < indent) : (iloop += 1) {
+                try std.fmt.format(stdout, "\t", .{});
+            }
+            switch (node.extended) {
+                .CData => |cdata| {
+                    const data = xml_tree.string_pool.get(cdata.data) orelse &[_]u16{};
 
-                try std.fmt.format(stdout.writer(), "{}", .{
-                    std.unicode.fmtUtf16le(data),
-                });
-            },
-            .Namespace => |namespace| {
-                if (node.header.type == .XmlStartNamespace) {
-                    const prefix = document.getString(namespace.prefix) orelse &[_]u16{};
-                    const uri = document.getString(namespace.uri) orelse &[_]u16{};
-
-                    try std.fmt.format(stdout.writer(), "xmlns:{}={}", .{
-                        std.unicode.fmtUtf16le(prefix),
-                        std.unicode.fmtUtf16le(uri),
+                    try std.fmt.format(stdout.writer(), "{}", .{
+                        std.unicode.fmtUtf16le(data),
                     });
-                }
-            },
-            .EndElement => |end| {
-                const name = document.getString(end.name) orelse &[_]u16{};
-                try std.fmt.format(stdout.writer(), "</{}>", .{std.unicode.fmtUtf16le(name)});
-            },
-            .Attribute => |attribute| {
-                try std.fmt.format(stdout.writer(), "<", .{});
-                {
-                    if (document.getString(attribute.namespace)) |ns| {
-                        try std.fmt.format(stdout.writer(), "{}:", .{std.unicode.fmtUtf16le(ns)});
-                    }
-                    if (document.getString(attribute.name)) |name| {
-                        try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
-                    }
-                }
-                for (document.attributes) |attr| {
-                    if (attr.node != node_id) continue;
-                    try std.fmt.format(stdout, "\n", .{});
-                    var iloop2: usize = 1;
-                    while (iloop2 < indent + 1) : (iloop2 += 1) {
-                        try std.fmt.format(stdout, "\t", .{});
-                    }
-                    if (document.getString(attr.value.namespace)) |ns| {
-                        try std.fmt.format(stdout.writer(), "{}/", .{std.unicode.fmtUtf16le(ns)});
-                    }
-                    if (document.getString(attr.value.name)) |name| {
-                        try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
-                    }
-                    if (document.getString(attr.value.raw_value)) |raw| {
-                        try std.fmt.format(stdout.writer(), "={}", .{std.unicode.fmtUtf16le(raw)});
-                    } else {
-                        try std.fmt.format(stdout.writer(), "={s}", .{
-                            @tagName(attr.value.typed_value.datatype),
+                },
+                .Namespace => |namespace| {
+                    if (node.header.type == .XmlStartNamespace) {
+                        const prefix = xml_tree.string_pool.get(namespace.prefix) orelse &[_]u16{};
+                        const uri = xml_tree.string_pool.get(namespace.uri) orelse &[_]u16{};
+
+                        try std.fmt.format(stdout.writer(), "xmlns:{}={}", .{
+                            std.unicode.fmtUtf16le(prefix),
+                            std.unicode.fmtUtf16le(uri),
                         });
                     }
-                }
-                try std.fmt.format(stdout.writer(), ">", .{});
-            },
-        }
-        try std.fmt.format(stdout.writer(), "\n", .{});
-        if (node.extended == .EndElement) {
-            indent -= 1;
+                },
+                .EndElement => |end| {
+                    const name = xml_tree.string_pool.get(end.name) orelse &[_]u16{};
+                    try std.fmt.format(stdout.writer(), "</{}>", .{std.unicode.fmtUtf16le(name)});
+                },
+                .Attribute => |attribute| {
+                    try std.fmt.format(stdout.writer(), "<", .{});
+                    {
+                        if (xml_tree.string_pool.get(attribute.namespace)) |ns| {
+                            try std.fmt.format(stdout.writer(), "{}:", .{std.unicode.fmtUtf16le(ns)});
+                        }
+                        if (xml_tree.string_pool.get(attribute.name)) |name| {
+                            try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
+                        }
+                    }
+                    for (xml_tree.attributes) |attr| {
+                        if (attr.node != node_id) continue;
+                        try std.fmt.format(stdout, "\n", .{});
+                        var iloop2: usize = 1;
+                        while (iloop2 < indent + 1) : (iloop2 += 1) {
+                            try std.fmt.format(stdout, "\t", .{});
+                        }
+                        if (xml_tree.string_pool.get(attr.namespace)) |ns| {
+                            try std.fmt.format(stdout.writer(), "{}/", .{std.unicode.fmtUtf16le(ns)});
+                        }
+                        if (xml_tree.string_pool.get(attr.name)) |name| {
+                            try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
+                        }
+                        if (xml_tree.string_pool.get(attr.raw_value)) |raw| {
+                            try std.fmt.format(stdout.writer(), "={}", .{std.unicode.fmtUtf16le(raw)});
+                        } else {
+                            try std.fmt.format(stdout.writer(), "={s}", .{
+                                @tagName(attr.typed_value.datatype),
+                            });
+                        }
+                    }
+                    try std.fmt.format(stdout.writer(), ">", .{});
+                },
+            }
+            try std.fmt.format(stdout.writer(), "\n", .{});
+            if (node.extended == .EndElement) {
+                indent -= 1;
+            }
         }
     }
 
-    if (document.resource_table) |table| {
+    for (document.tables) |table| {
         for (table.packages) |package| {
             try std.fmt.format(stdout.writer(), "Package {} (ID {})\n", .{ std.unicode.fmtUtf16le(package.name), package.id });
             try std.fmt.format(stdout.writer(), "\tType Strings {}\n\tLast Public Type {}\n\tKey Strings {}\n\tLast Public Key {}\n\tType ID Offset {}\n", .{

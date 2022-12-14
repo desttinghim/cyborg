@@ -222,6 +222,11 @@ const StringPool = struct {
         }
     };
 
+    pub fn get(self: StringPool, refe: Ref) ?[]const u16 {
+        if (refe.index == std.math.maxInt(u32)) return null;
+        return self.slices[refe.index];
+    }
+
     pub fn readAlloc(file: std.fs.File, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !StringPool {
         const reader = file.reader();
         const header = try Header.read(reader, chunk_header);
@@ -290,9 +295,72 @@ const StringPool = struct {
 };
 
 const XMLTree = struct {
-    const Header = struct {
-        header: ResourceChunk,
-    };
+    header: Header,
+    string_pool: StringPool,
+    nodes: []Node,
+    attributes: []Attribute,
+
+    pub fn readAlloc(file: std.fs.File, starting_pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !XMLTree {
+        const reader = file.reader();
+        const header = chunk_header;
+
+        var string_pool: StringPool = undefined;
+
+        var pos: usize = try file.getPos();
+        var resource_header = try ResourceChunk.read(reader);
+
+        var nodes = std.ArrayList(Node).init(alloc);
+        defer nodes.deinit();
+        var attributes = std.ArrayList(Attribute).init(alloc);
+        defer attributes.deinit();
+
+        while (true) {
+            switch (resource_header.type) {
+                .StringPool => {
+                    string_pool = try StringPool.readAlloc(file, resource_header, alloc);
+                },
+                .XmlStartNamespace,
+                .XmlEndElement,
+                .XmlEndNamespace,
+                => try nodes.append(try XMLTree.Node.read(reader, header)),
+                .XmlStartElement => {
+                    var node_id = nodes.items.len;
+                    var node = try XMLTree.Node.read(reader, header);
+                    try nodes.append(node);
+                    var attribute = node.extended.Attribute;
+                    if (attribute.count > 0) {
+                        var i: usize = 0;
+                        while (i < attribute.count) : (i += 1) {
+                            try attributes.append(
+                                try XMLTree.Attribute.read(reader, node_id),
+                            );
+                        }
+                    }
+                },
+                else => {
+                    return error.InvalidChunkType;
+                },
+            }
+            if (pos + resource_header.size >= starting_pos + header.size) {
+                std.log.err("Next chunk outside of xml_tree: {} + {} = {} > {}", .{ pos, resource_header.size, pos + resource_header.size, header.size });
+                break;
+            }
+            try file.seekTo(pos + resource_header.size);
+            pos = try file.getPos();
+            resource_header = try ResourceChunk.read(reader);
+        }
+
+        return XMLTree{
+            .header = header,
+            .string_pool = string_pool,
+            .nodes = nodes.toOwnedSlice(),
+            .attributes = attributes.toOwnedSlice(),
+        };
+    }
+
+    const Header = ResourceChunk;
+
+    const XMLResourceMap = ResourceChunk;
 
     const Node = struct {
         header: ResourceChunk,
@@ -424,12 +492,16 @@ const XMLTree = struct {
         raw_value: StringPool.Ref,
         typed_value: Value,
 
-        pub fn read(reader: anytype) !Attribute {
+        // Runtime values
+        node: usize,
+
+        pub fn read(reader: anytype, node: usize) !Attribute {
             return Attribute{
                 .namespace = try StringPool.Ref.read(reader),
                 .name = try StringPool.Ref.read(reader),
                 .raw_value = try StringPool.Ref.read(reader),
                 .typed_value = try Value.read(reader),
+                .node = node,
             };
         }
 
@@ -823,96 +895,29 @@ const ResourceTable = struct {
 
 pub const Document = struct {
     arena: std.heap.ArenaAllocator,
-    string_pool: StringPool,
-    resource_nodes: []XMLTree.Node,
-    resource_header: XMLTree.Header,
-    attributes: []Attribute,
-    resource_table: ?ResourceTable,
-
-    const Attribute = struct {
-        node: usize,
-        value: XMLTree.Attribute,
-    };
+    xml_trees: []XMLTree,
+    tables: []ResourceTable,
 
     pub fn readAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator) !Document {
         const reader = file.reader();
 
-        var signature: [4]u8 = undefined;
-        const count = try reader.read(&signature);
-        if (count != 4) return error.UnexpectedEof;
-
-        const file_length = if (!std.mem.eql(u8, &signature, "\x03\x00\x08\x00"))
-            try reader.readInt(u32, .Little)
-        else file_length: {
-            try file.seekTo(0);
-            break :file_length try file.getEndPos();
-        };
+        const file_length = try file.getEndPos();
 
         var arena = std.heap.ArenaAllocator.init(backing_allocator);
         const alloc = arena.allocator();
 
-        var string_pool: StringPool = undefined;
-        var resource_header: XMLTree.Header = undefined;
-        var nodes = std.ArrayList(XMLTree.Node).init(alloc);
-        defer nodes.deinit();
-        var attributes = std.ArrayList(Document.Attribute).init(alloc);
-        defer attributes.deinit();
-        var resource_table: ?ResourceTable = null;
+        var xml_trees = std.ArrayList(XMLTree).init(backing_allocator);
+        var tables = std.ArrayList(ResourceTable).init(backing_allocator);
 
         var pos: usize = try file.getPos();
-        // var table_header: ?ResourceChunk = null;
         var header = try ResourceChunk.read(reader);
         while (true) {
             switch (header.type) {
-                .StringPool => {
-                    string_pool = try StringPool.readAlloc(file, header, alloc);
-                },
                 .Xml => {
-                    std.log.info("XML Header: {}", .{header});
-                    // Go to body
-                    try file.seekTo(pos + header.header_size);
-                    pos = try file.getPos();
-                    header = try ResourceChunk.read(reader);
-                    continue;
-                },
-                .XmlResourceMap => resource_header = XMLTree.Header{ .header = header },
-                .XmlStartNamespace,
-                .XmlEndElement,
-                .XmlEndNamespace,
-                => try nodes.append(try XMLTree.Node.read(reader, header)),
-                .XmlStartElement => {
-                    var node_id = nodes.items.len;
-                    var node = try XMLTree.Node.read(reader, header);
-                    try nodes.append(node);
-                    var attribute = node.extended.Attribute;
-                    if (attribute.count > 0) {
-                        var i: usize = 0;
-                        while (i < attribute.count) : (i += 1) {
-                            try attributes.append(.{
-                                .node = node_id,
-                                .value = try XMLTree.Attribute.read(reader),
-                            });
-                        }
-                    }
+                    try xml_trees.append(try XMLTree.readAlloc(file, pos, header, alloc));
                 },
                 .Table => {
-                    resource_table = try ResourceTable.readAlloc(file, pos, header, alloc);
-                },
-                .TablePackage => {
-                    // const table_package_type = try ResourceTable.Package.read(reader, header, alloc);
-                    // try packages.append(table_package_type);
-                    // try file.seekTo(pos + header.header_size);
-                    // pos = try file.getPos();
-                    // header = try ResourceChunk.read(reader);
-                    // continue;
-                },
-                .TableTypeSpec => {
-                    const table_spec_type = try ResourceTable.TypeSpec.read(reader, header, alloc);
-                    std.log.info("Table spec type: {?}", .{table_spec_type});
-                },
-                .TableType => {
-                    const table_type = try ResourceTable.TableType.read(reader, header, alloc);
-                    std.log.info("Table type: {} {?}", .{ pos, table_type });
+                    try tables.append(try ResourceTable.readAlloc(file, pos, header, alloc));
                 },
                 .Null => {
                     std.log.err("Encountered null chunk {}, {?}", .{ pos, header });
@@ -934,15 +939,13 @@ pub const Document = struct {
 
         return Document{
             .arena = arena,
-            .string_pool = string_pool,
-            .resource_nodes = nodes.toOwnedSlice(),
-            .resource_header = resource_header,
-            .attributes = attributes.toOwnedSlice(),
-            .resource_table = resource_table,
+            .xml_trees = xml_trees.toOwnedSlice(),
+            .tables = tables.toOwnedSlice(),
         };
     }
 
     pub fn write(document: Document, file: std.fs.File) !Document {
+        // TODO: Rewrite this to reflect updated understanding
         const writer = file.writer();
 
         // Write magic bytes
