@@ -100,15 +100,27 @@ pub fn readApk(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 
     try archive_reader.load();
 
+    // Read manifest
     const manifest_header = archive_reader.findFile("AndroidManifest.xml") orelse return error.MissingManifest;
 
     const manifest_string = try archive_reader.extractFileString(manifest_header, alloc, true);
     defer alloc.free(manifest_string);
 
-    var stream = std.io.FixedBufferStream([]const u8){ .pos = 0, .buffer = manifest_string };
-    var document = try binxml.Document.readAlloc(stream.seekableStream(), stream.reader(), alloc);
+    var manifest_stream = std.io.FixedBufferStream([]const u8){ .pos = 0, .buffer = manifest_string };
+    var document = try binxml.Document.readAlloc(manifest_stream.seekableStream(), manifest_stream.reader(), alloc);
 
     try printInfo(document, stdout);
+
+    // Read resource table
+    const resource_header = archive_reader.findFile("resources.arsc") orelse return error.MissingResourceTable;
+
+    const resource_string = try archive_reader.extractFileString(resource_header, alloc, true);
+    defer alloc.free(resource_string);
+
+    var resource_stream = std.io.FixedBufferStream([]const u8){ .pos = 0, .buffer = resource_string };
+    var resource_document = try binxml.Document.readAlloc(resource_stream.seekableStream(), resource_stream.reader(), alloc);
+
+    try printInfo(resource_document, stdout);
 }
 
 fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
