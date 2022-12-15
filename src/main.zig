@@ -97,7 +97,7 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
             }
             switch (node.extended) {
                 .CData => |cdata| {
-                    const data = xml_tree.string_pool.get(cdata.data) orelse &[_]u16{};
+                    const data = xml_tree.string_pool.getUtf16(cdata.data) orelse &[_]u16{};
 
                     try std.fmt.format(stdout.writer(), "{}", .{
                         std.unicode.fmtUtf16le(data),
@@ -105,8 +105,8 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
                 },
                 .Namespace => |namespace| {
                     if (node.header.type == .XmlStartNamespace) {
-                        const prefix = xml_tree.string_pool.get(namespace.prefix) orelse &[_]u16{};
-                        const uri = xml_tree.string_pool.get(namespace.uri) orelse &[_]u16{};
+                        const prefix = xml_tree.string_pool.getUtf16(namespace.prefix) orelse &[_]u16{};
+                        const uri = xml_tree.string_pool.getUtf16(namespace.uri) orelse &[_]u16{};
 
                         try std.fmt.format(stdout.writer(), "xmlns:{}={}", .{
                             std.unicode.fmtUtf16le(prefix),
@@ -115,16 +115,16 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
                     }
                 },
                 .EndElement => |end| {
-                    const name = xml_tree.string_pool.get(end.name) orelse &[_]u16{};
+                    const name = xml_tree.string_pool.getUtf16(end.name) orelse &[_]u16{};
                     try std.fmt.format(stdout.writer(), "</{}>", .{std.unicode.fmtUtf16le(name)});
                 },
                 .Attribute => |attribute| {
                     try std.fmt.format(stdout.writer(), "<", .{});
                     {
-                        if (xml_tree.string_pool.get(attribute.namespace)) |ns| {
+                        if (xml_tree.string_pool.getUtf16(attribute.namespace)) |ns| {
                             try std.fmt.format(stdout.writer(), "{}:", .{std.unicode.fmtUtf16le(ns)});
                         }
-                        if (xml_tree.string_pool.get(attribute.name)) |name| {
+                        if (xml_tree.string_pool.getUtf16(attribute.name)) |name| {
                             try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
                         }
                     }
@@ -135,13 +135,13 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
                         while (iloop2 < indent + 1) : (iloop2 += 1) {
                             try std.fmt.format(stdout, "\t", .{});
                         }
-                        if (xml_tree.string_pool.get(attr.namespace)) |ns| {
+                        if (xml_tree.string_pool.getUtf16(attr.namespace)) |ns| {
                             try std.fmt.format(stdout.writer(), "{}/", .{std.unicode.fmtUtf16le(ns)});
                         }
-                        if (xml_tree.string_pool.get(attr.name)) |name| {
+                        if (xml_tree.string_pool.getUtf16(attr.name)) |name| {
                             try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
                         }
-                        if (xml_tree.string_pool.get(attr.raw_value)) |raw| {
+                        if (xml_tree.string_pool.getUtf16(attr.raw_value)) |raw| {
                             try std.fmt.format(stdout.writer(), "={}", .{std.unicode.fmtUtf16le(raw)});
                         } else {
                             try std.fmt.format(stdout.writer(), "={s}", .{
@@ -179,7 +179,9 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
                 try std.fmt.format(stdout.writer(), "\tTable Type {}, {}\n", .{ table_type.id, table_type.flags });
                 // try std.fmt.format(stdout.writer(), "\t\tConfig: {}\n", .{table_type.config});
                 for (table_type.entries) |*entry| {
-                    try std.fmt.format(stdout.writer(), "\t\t{}: {?}\n", .{ std.unicode.fmtUtf16le(package.key_string_pool.slices[entry.key.index]), entry.value });
+                    if (package.key_string_pool.getUtf16(entry.key)) |entry_string| {
+                        try std.fmt.format(stdout.writer(), "\t\t{}: {?}\n", .{ std.unicode.fmtUtf16le(entry_string), entry.value });
+                    }
                 }
             }
         }

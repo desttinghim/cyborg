@@ -151,8 +151,18 @@ const Value = struct {
 
 const StringPool = struct {
     header: Header,
-    pool: []u16,
-    slices: [][]u16,
+    data: Data,
+
+    const Data = union {
+        Utf8: struct {
+            pool: []u8,
+            slices: [][]u8,
+        },
+        Utf16: struct {
+            pool: []u16,
+            slices: [][]u16,
+        },
+    };
 
     const Ref = struct {
         index: u32,
@@ -172,20 +182,21 @@ const StringPool = struct {
     const Header = struct {
         header: ResourceChunk,
         string_count: u32,
-        style_count: u32,
+        style_count: ?u32,
         flags: Flags,
         strings_start: u32,
-        styles_start: u32,
+        styles_start: ?u32,
 
         const Flags = packed struct(u32) {
             sorted: bool,
+            _unused1: u7 = 0,
             utf8: bool,
-            _unused: u30 = 0,
+            _unused2: u23 = 0,
         };
 
-        fn read(reader: anytype, header: ResourceChunk) !Header {
+        fn read(reader: anytype, chunk_header: ResourceChunk) !Header {
             return Header{
-                .header = header,
+                .header = chunk_header,
                 .string_count = try reader.readInt(u32, .Little),
                 .style_count = try reader.readInt(u32, .Little),
                 .flags = @bitCast(Flags, try reader.readInt(u32, .Little)),
@@ -202,65 +213,95 @@ const StringPool = struct {
             try writer.writeInt(u32, header.strings_start, .Little);
             try writer.writeInt(u32, header.styles_start, .Little);
         }
-
-        pub fn getAlloc(self: Header, alloc: std.mem.Allocator, file: std.fs.File, refe: Ref) !?[]const u16 {
-            if (refe.index == std.math.maxInt(u32)) return null;
-            try file.seekTo(8 + self.header.header_size + refe.index * 4);
-            const reader = file.reader();
-            const offset = try reader.readInt(u32, .Little);
-            try file.seekTo(8 + self.strings_start + offset);
-            var length: u32 = try reader.readInt(u16, .Little);
-            if (length > 32767) {
-                length = (length & 0b0111_1111) << 16;
-                length += try reader.readInt(u16, .Little);
-            }
-            const mem = try alloc.alloc(u16, length);
-            for (mem) |*char| {
-                char.* = try reader.readInt(u16, .Little);
-            }
-            return mem;
-        }
     };
 
-    pub fn get(self: StringPool, refe: Ref) ?[]const u16 {
-        if (refe.index == std.math.maxInt(u32)) return null;
-        return self.slices[refe.index];
+    pub fn getUtf16(self: StringPool, refe: Ref) ?[]const u16 {
+        if (self.header.flags.utf8 or refe.index == std.math.maxInt(u32)) return null;
+        return self.data.Utf16.slices[refe.index];
     }
 
-    pub fn readAlloc(file: std.fs.File, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !StringPool {
+    pub fn getUtf8(self: StringPool, refe: Ref) ?[]const u8 {
+        if (self.header.flags.utf8 or refe.index == std.math.maxInt(u32)) return null;
+        return self.data.Utf8.slices[refe.index];
+    }
+
+    pub fn readAlloc(file: std.fs.File, pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !StringPool {
         const reader = file.reader();
         const header = try Header.read(reader, chunk_header);
-        const buf_size = (header.header.size - header.header.header_size) / 2;
-        const string_buf = try alloc.alloc(u16, buf_size);
 
-        const string_offset = try alloc.alloc(usize, header.string_count);
-        defer alloc.free(string_offset);
+        const data: Data = data: {
+            if (header.flags.utf8) {
+                std.log.info("Strings are utf8", .{});
+                const buf_size = (header.header.size - header.header.header_size);
+                const string_buf = try alloc.alloc(u8, buf_size);
 
-        // Create slices from offsets
-        for (string_offset) |*offset| {
-            offset.* = try reader.readInt(u32, .Little);
-        }
-        // Copy UTF16 buffer into memory
-        for (string_buf) |*char| {
-            char.* = try reader.readInt(u16, .Little);
-        }
-        // Construct slices
-        const string_pool = try alloc.alloc([]u16, header.string_count);
-        for (string_offset) |offset, i| {
-            var buf_index = offset / 2;
-            var len: usize = string_buf[buf_index];
-            var add_index: usize = 1;
-            if (len > 32767) {
-                len = (len & 0b0111_1111) << 16;
-                len += string_buf[buf_index + add_index];
-                add_index += 1;
+                const string_offset = try alloc.alloc(usize, header.string_count);
+                defer alloc.free(string_offset);
+
+                // Create slices from offsets
+                try file.seekTo(pos + header.header.header_size);
+                for (string_offset) |*offset| {
+                    offset.* = try reader.readInt(u32, .Little);
+                }
+
+                // Copy UTF16 buffer into memory
+                for (string_buf) |*char| {
+                    char.* = try reader.readInt(u8, .Little);
+                }
+
+                // Construct slices
+                const string_pool = try alloc.alloc([]u8, header.string_count);
+                for (string_offset) |offset, i| {
+                    var buf_index = offset;
+                    var len: usize = string_buf[buf_index];
+                    var add_index: usize = 1;
+                    string_pool[i] = string_buf[buf_index + add_index .. buf_index + add_index + len];
+                }
+                break :data .{ .Utf8 = .{
+                    .pool = string_buf,
+                    .slices = string_pool,
+                } };
+            } else {
+                const buf_size = (header.header.size - header.header.header_size) / 2;
+                const string_buf = try alloc.alloc(u16, buf_size);
+
+                const string_offset = try alloc.alloc(usize, header.string_count);
+                defer alloc.free(string_offset);
+
+                // Create slices from offsets
+                try file.seekTo(pos + header.header.header_size);
+                for (string_offset) |*offset| {
+                    offset.* = try reader.readInt(u32, .Little);
+                }
+
+                // Copy UTF16 buffer into memory
+                for (string_buf) |*char| {
+                    char.* = try reader.readInt(u16, .Little);
+                }
+
+                // Construct slices
+                const string_pool = try alloc.alloc([]u16, header.string_count);
+                for (string_offset) |offset, i| {
+                    var buf_index = offset / 2;
+                    var len: usize = string_buf[buf_index];
+                    var add_index: usize = 1;
+                    if (len > 32767) {
+                        len = (len & 0b0111_1111) << 16;
+                        len += string_buf[buf_index + add_index];
+                        add_index += 1;
+                    }
+                    string_pool[i] = string_buf[buf_index + add_index .. buf_index + add_index + len];
+                }
+                break :data .{ .Utf16 = .{
+                    .pool = string_buf,
+                    .slices = string_pool,
+                } };
             }
-            string_pool[i] = string_buf[buf_index + add_index .. buf_index + add_index + len];
-        }
+        };
+
         return StringPool{
             .header = header,
-            .pool = string_buf,
-            .slices = string_pool,
+            .data = data,
         };
     }
 
@@ -320,7 +361,7 @@ const XMLTree = struct {
         while (true) {
             switch (resource_header.type) {
                 .StringPool => {
-                    string_pool = try StringPool.readAlloc(file, resource_header, alloc);
+                    string_pool = try StringPool.readAlloc(file, pos, resource_header, alloc);
                 },
                 .XmlStartNamespace,
                 .XmlEndElement,
@@ -544,7 +585,7 @@ const ResourceTable = struct {
         while (true) {
             switch (package_header.type) {
                 .StringPool => {
-                    string_pool = try StringPool.readAlloc(file, package_header, alloc);
+                    string_pool = try StringPool.readAlloc(file, pos, package_header, alloc);
                 },
                 .TablePackage => {
                     const table_package_type = try Package.read(file, pos, package_header, alloc);
@@ -640,9 +681,9 @@ const ResourceTable = struct {
                 switch (package_header.type) {
                     .StringPool => {
                         if (type_string_pool == null) {
-                            type_string_pool = try StringPool.readAlloc(file, package_header, alloc);
+                            type_string_pool = try StringPool.readAlloc(file, pos, package_header, alloc);
                         } else if (key_string_pool == null) {
-                            key_string_pool = try StringPool.readAlloc(file, package_header, alloc);
+                            key_string_pool = try StringPool.readAlloc(file, pos, package_header, alloc);
                         } else {
                             return error.TooManyStringPools;
                         }
@@ -1000,10 +1041,5 @@ pub const Document = struct {
         const file_size = file.getEndPos();
         try file.seekTo(4);
         try writer.write(file_size);
-    }
-
-    pub fn getString(document: Document, ref: StringPool.Ref) ?[]const u16 {
-        if (ref.index > document.string_pool.slices.len) return null;
-        return document.string_pool.slices[ref.index];
     }
 };
