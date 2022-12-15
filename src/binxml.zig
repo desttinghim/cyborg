@@ -225,8 +225,7 @@ const StringPool = struct {
         return self.data.Utf8.slices[refe.index];
     }
 
-    pub fn readAlloc(file: std.fs.File, pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !StringPool {
-        const reader = file.reader();
+    pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !StringPool {
         const header = try Header.read(reader, chunk_header);
 
         const data: Data = data: {
@@ -239,7 +238,7 @@ const StringPool = struct {
                 defer alloc.free(string_offset);
 
                 // Create slices from offsets
-                try file.seekTo(pos + header.header.header_size);
+                try seek.seekTo(pos + header.header.header_size);
                 for (string_offset) |*offset| {
                     offset.* = try reader.readInt(u32, .Little);
                 }
@@ -269,7 +268,7 @@ const StringPool = struct {
                 defer alloc.free(string_offset);
 
                 // Create slices from offsets
-                try file.seekTo(pos + header.header.header_size);
+                try seek.seekTo(pos + header.header.header_size);
                 for (string_offset) |*offset| {
                     offset.* = try reader.readInt(u32, .Little);
                 }
@@ -305,15 +304,14 @@ const StringPool = struct {
         };
     }
 
-    pub fn read(file: std.fs.File, header: Header, string_buf: []u16, string_pool: [][]const u16) !void {
-        const reader = file.reader();
+    pub fn read(seek: anytype, reader: anytype, header: Header, string_buf: []u16, string_pool: [][]const u16) !void {
         // Copy UTF16 buffer into memory
-        try file.seekTo(8 + header.strings_start);
+        try seek.seekTo(8 + header.strings_start);
         for (string_buf) |*char| {
             char.* = try reader.readInt(u16, .Little);
         }
         // Create slices from offsets
-        try file.seekTo(8 + header.header.header_size);
+        try seek.seekTo(8 + header.header.header_size);
         for (string_pool) |*string| {
             const offset = try reader.readInt(u32, .Little);
             std.debug.assert(offset % 2 == 0);
@@ -344,13 +342,12 @@ const XMLTree = struct {
     nodes: []Node,
     attributes: []Attribute,
 
-    pub fn readAlloc(file: std.fs.File, starting_pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !XMLTree {
-        const reader = file.reader();
+    pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !XMLTree {
         const header = chunk_header;
 
         var string_pool: StringPool = undefined;
 
-        var pos: usize = try file.getPos();
+        var pos: usize = try seek.getPos();
         var resource_header = try ResourceChunk.read(reader);
 
         var nodes = std.ArrayList(Node).init(alloc);
@@ -361,7 +358,7 @@ const XMLTree = struct {
         while (true) {
             switch (resource_header.type) {
                 .StringPool => {
-                    string_pool = try StringPool.readAlloc(file, pos, resource_header, alloc);
+                    string_pool = try StringPool.readAlloc(seek, reader, pos, resource_header, alloc);
                 },
                 .XmlStartNamespace,
                 .XmlEndElement,
@@ -394,8 +391,8 @@ const XMLTree = struct {
                 std.log.err("Next chunk outside of xml_tree: {} + {} = {} > {}", .{ pos, resource_header.size, pos + resource_header.size, header.size });
                 break;
             }
-            try file.seekTo(pos + resource_header.size);
-            pos = try file.getPos();
+            try seek.seekTo(pos + resource_header.size);
+            pos = try seek.getPos();
             resource_header = try ResourceChunk.read(reader);
         }
 
@@ -570,8 +567,7 @@ const ResourceTable = struct {
     string_pool: StringPool,
     packages: []Package,
 
-    pub fn readAlloc(file: std.fs.File, starting_pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !ResourceTable {
-        const reader = file.reader();
+    pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !ResourceTable {
         const header = try Header.read(reader, chunk_header);
 
         var string_pool: StringPool = undefined;
@@ -579,16 +575,16 @@ const ResourceTable = struct {
         var packages = try std.ArrayList(ResourceTable.Package).initCapacity(alloc, header.package_count);
         errdefer packages.deinit();
 
-        var pos: usize = try file.getPos();
+        var pos: usize = try seek.getPos();
         var package_header = try ResourceChunk.read(reader);
 
         while (true) {
             switch (package_header.type) {
                 .StringPool => {
-                    string_pool = try StringPool.readAlloc(file, pos, package_header, alloc);
+                    string_pool = try StringPool.readAlloc(seek, reader, pos, package_header, alloc);
                 },
                 .TablePackage => {
-                    const table_package_type = try Package.read(file, pos, package_header, alloc);
+                    const table_package_type = try Package.read(seek, reader, pos, package_header, alloc);
                     try packages.append(table_package_type);
                 },
                 else => {
@@ -599,8 +595,8 @@ const ResourceTable = struct {
                 std.log.err("Next chunk outside of table: {} + {} = {} > {}", .{ pos, package_header.size, pos + package_header.size, header.header.size });
                 break;
             }
-            try file.seekTo(pos + package_header.size);
-            pos = try file.getPos();
+            try seek.seekTo(pos + package_header.size);
+            pos = try seek.getPos();
             package_header = try ResourceChunk.read(reader);
         }
 
@@ -644,8 +640,7 @@ const ResourceTable = struct {
         type_spec: []TypeSpec,
         table_type: []TableType,
 
-        fn read(file: std.fs.File, starting_pos: usize, header: ResourceChunk, alloc: std.mem.Allocator) !Package {
-            const reader = file.reader();
+        fn read(seek: anytype, reader: anytype, starting_pos: usize, header: ResourceChunk, alloc: std.mem.Allocator) !Package {
             var package: Package = undefined;
 
             package.header = header;
@@ -674,16 +669,16 @@ const ResourceTable = struct {
             var key_string_pool: ?StringPool = null;
 
             var pos = starting_pos;
-            try file.seekTo(pos + header.header_size);
-            pos = try file.getPos();
+            try seek.seekTo(pos + header.header_size);
+            pos = try seek.getPos();
             var package_header = try ResourceChunk.read(reader);
             while (true) {
                 switch (package_header.type) {
                     .StringPool => {
                         if (type_string_pool == null) {
-                            type_string_pool = try StringPool.readAlloc(file, pos, package_header, alloc);
+                            type_string_pool = try StringPool.readAlloc(seek, reader, pos, package_header, alloc);
                         } else if (key_string_pool == null) {
-                            key_string_pool = try StringPool.readAlloc(file, pos, package_header, alloc);
+                            key_string_pool = try StringPool.readAlloc(seek, reader, pos, package_header, alloc);
                         } else {
                             return error.TooManyStringPools;
                         }
@@ -694,7 +689,7 @@ const ResourceTable = struct {
                         // std.log.info("Table spec type: {?}", .{table_spec_type});
                     },
                     .TableType => {
-                        const table_type = try ResourceTable.TableType.read(file, pos, package_header, alloc);
+                        const table_type = try ResourceTable.TableType.read(seek, reader, pos, package_header, alloc);
                         try table_types.append(table_type);
                         // std.log.info("Table type: {} {?}", .{ pos, table_type });
                     },
@@ -707,8 +702,8 @@ const ResourceTable = struct {
                     std.log.err("Next chunk outside of package: {} + {} = {} > {}", .{ pos, package_header.size, pos + package_header.size, starting_pos + header.size });
                     break;
                 }
-                try file.seekTo(pos + package_header.size);
-                pos = try file.getPos();
+                try seek.seekTo(pos + package_header.size);
+                pos = try seek.getPos();
                 package_header = try ResourceChunk.read(reader);
             }
             package.type_string_pool = type_string_pool orelse return error.MissingTypeStringPool;
@@ -861,8 +856,7 @@ const ResourceTable = struct {
         entry_indices: []u32,
         entries: []Entry,
 
-        fn read(file: std.fs.File, pos: usize, header: ResourceChunk, alloc: std.mem.Allocator) !TableType {
-            const reader = file.reader();
+        fn read(seek: anytype, reader: anytype, pos: usize, header: ResourceChunk, alloc: std.mem.Allocator) !TableType {
             var table_type: TableType = undefined;
 
             table_type.header = header;
@@ -876,12 +870,12 @@ const ResourceTable = struct {
             if (table_type.flags & 0x01 != 0) {
                 // Complex flag
             } else {
-                try file.seekTo(pos + table_type.header.header_size);
+                try seek.seekTo(pos + table_type.header.header_size);
                 table_type.entry_indices = try alloc.alloc(u32, table_type.entry_count);
                 for (table_type.entry_indices) |*entry| {
                     entry.* = try reader.readInt(u32, .Little);
                 }
-                try file.seekTo(pos + table_type.entries_start);
+                try seek.seekTo(pos + table_type.entries_start);
                 table_type.entries = try alloc.alloc(Entry, table_type.entry_count);
                 for (table_type.entries) |*entry| {
                     entry.* = try Entry.read(reader);
@@ -947,10 +941,8 @@ pub const Document = struct {
     xml_trees: []XMLTree,
     tables: []ResourceTable,
 
-    pub fn readAlloc(file: std.fs.File, backing_allocator: std.mem.Allocator) !Document {
-        const reader = file.reader();
-
-        const file_length = try file.getEndPos();
+    pub fn readAlloc(seek: anytype, reader: anytype, backing_allocator: std.mem.Allocator) !Document {
+        const file_length = try seek.getEndPos();
 
         var arena = std.heap.ArenaAllocator.init(backing_allocator);
         const alloc = arena.allocator();
@@ -958,15 +950,15 @@ pub const Document = struct {
         var xml_trees = std.ArrayList(XMLTree).init(backing_allocator);
         var tables = std.ArrayList(ResourceTable).init(backing_allocator);
 
-        var pos: usize = try file.getPos();
+        var pos: usize = try seek.getPos();
         var header = try ResourceChunk.read(reader);
         while (true) {
             switch (header.type) {
                 .Xml => {
-                    try xml_trees.append(try XMLTree.readAlloc(file, pos, header, alloc));
+                    try xml_trees.append(try XMLTree.readAlloc(seek, reader, pos, header, alloc));
                 },
                 .Table => {
-                    try tables.append(try ResourceTable.readAlloc(file, pos, header, alloc));
+                    try tables.append(try ResourceTable.readAlloc(seek, reader, pos, header, alloc));
                 },
                 .Null => {
                     std.log.err("Encountered null chunk {}, {?}", .{ pos, header });
@@ -981,8 +973,8 @@ pub const Document = struct {
                 std.log.err("Next chunk outside of file: {} + {} = {} > {}", .{ pos, header.size, pos + header.size, file_length });
                 break;
             }
-            try file.seekTo(pos + header.size);
-            pos = try file.getPos();
+            try seek.seekTo(pos + header.size);
+            pos = try seek.getPos();
             header = try ResourceChunk.read(reader);
         }
 
@@ -993,9 +985,8 @@ pub const Document = struct {
         };
     }
 
-    pub fn write(document: Document, file: std.fs.File) !Document {
+    pub fn write(document: Document, seek: anytype, writer: anytype) !Document {
         // TODO: Rewrite this to reflect updated understanding
-        const writer = file.writer();
 
         // Write magic bytes
         try writer.write("\x03\x00\x08\x00");
@@ -1035,8 +1026,8 @@ pub const Document = struct {
         }
 
         // Backtrack and write the file size
-        const file_size = file.getEndPos();
-        try file.seekTo(4);
+        const file_size = seek.getEndPos();
+        try seek.seekTo(4);
         try writer.write(file_size);
     }
 };

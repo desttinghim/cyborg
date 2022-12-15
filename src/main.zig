@@ -14,6 +14,7 @@ const usage =
     \\  zip <file>                  Reads a zip file and lists the contents
     \\  zip <file> <filename>       Reads the contents of a file from a zip file
     \\  xml <file>                  Reads an Android binary XML file
+    \\  apk <file>                  Reads the AndroidManifest.xml in the indicated apk
     // \\  pkg <manifest> <out>        Creates an APK from a manifest.json
     \\
 ;
@@ -21,6 +22,7 @@ const usage =
 const Subcommand = enum {
     zip,
     xml,
+    apk,
     // pkg,
 };
 
@@ -51,6 +53,7 @@ pub fn run(stdout: std.fs.File) !void {
     switch (cmd) {
         .zip => try readZip(alloc, args, stdout),
         .xml => try readXml(alloc, args, stdout),
+        .apk => try readApk(alloc, args, stdout),
         // .pkg => try writePackage(alloc, args, stdout),
     }
 }
@@ -82,7 +85,7 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    var document = try binxml.Document.readAlloc(file, arena_alloc);
+    var document = try binxml.Document.readAlloc(file.seekableStream(), file.reader(), arena_alloc);
 
     var indent: usize = 0;
 
@@ -188,46 +191,104 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     }
 }
 
-// pub fn writePackage(backing_alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
-//     // Create an arena allocator
-//     var arena = std.heap.ArenaAllocator.init(backing_alloc);
-//     const alloc = arena.allocator();
-//     defer arena.deinit();
+pub fn readApk(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+    const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+    const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
+    const dir = try std.fs.openDirAbsolute(dirpath, .{});
+    const file = try dir.openFile(filepath, .{});
 
-//     // Open the manifest.json
-//     const manifest_data = manifest: {
-//         const filepath = try std.fs.realpathAlloc(alloc, args[2]);
-//         const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
-//         const dir = try std.fs.openDirAbsolute(dirpath, .{});
-//         const file = try dir.openFile(filepath, .{});
-//         defer file.close();
-//         const data = try file.readToEndAlloc(alloc, 4 * 1024 * 1024);
-//         break :manifest data;
-//     };
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &std.io.StreamSource{ .file = file });
 
-//     // Read the manifest and convert it to Android's binary XML format
-//     var tokens = std.json.TokenStream.init(manifest_data);
-//     const document = std.json.parse(manifest.Document, &tokens, .{ .allocator = alloc }) catch |e| {
-//         try std.fmt.format(stdout.writer(), "{s}\n", .{@errorName(e)});
-//         return;
-//     };
-//     defer std.json.parseFree(manifest.Document, document, .{ .allocator = alloc });
+    try archive_reader.load();
 
-//     const bindoc = try binxml.Document.serialize(alloc, document);
-//     _ = bindoc;
+    const manifest_header = archive_reader.findFile("AndroidManifest.xml") orelse return error.MissingManifest;
 
-//     // Create files
-//     // var records = std.ArrayList().initCapacity(
-//     //     alloc,
-//     // );
+    const manifest_string = try archive_reader.extractFileString(manifest_header, alloc, true);
+    defer alloc.free(manifest_string);
 
-//     // Create the zip file
-//     // const zip = zip: {
-//     //     const outpath = try std.fs.realpathAlloc(alloc, args[3]);
-//     //     const dirpath = std.fs.path.dirname(outpath) orelse return error.NonexistentDirectory;
-//     //     const dir = try std.fs.openDirAbsolute(dirpath, .{});
-//     //     break :zip try dir.openFile(outpath, .{});
-//     // };
+    var stream = std.io.FixedBufferStream([]const u8){ .pos = 0, .buffer = manifest_string };
+    var document = try binxml.Document.readAlloc(stream.seekableStream(), stream.reader(), alloc);
 
-//     // try ZIP.serialize(alloc, document);
-// }
+    var indent: usize = 0;
+
+    for (document.xml_trees) |xml_tree| {
+        for (xml_tree.nodes) |node, node_id| {
+            if (node.extended == .Attribute) {
+                indent += 1;
+            }
+            var iloop: usize = 1;
+            while (iloop < indent) : (iloop += 1) {
+                try std.fmt.format(stdout, "\t", .{});
+            }
+            switch (node.extended) {
+                .CData => |cdata| {
+                    const data = xml_tree.string_pool.getUtf16(cdata.data) orelse &[_]u16{};
+
+                    try std.fmt.format(stdout.writer(), "{}", .{
+                        std.unicode.fmtUtf16le(data),
+                    });
+                },
+                .Namespace => |namespace| {
+                    if (node.header.type == .XmlStartNamespace) {
+                        const prefix = xml_tree.string_pool.getUtf16(namespace.prefix) orelse &[_]u16{};
+                        const uri = xml_tree.string_pool.getUtf16(namespace.uri) orelse &[_]u16{};
+
+                        try std.fmt.format(stdout.writer(), "xmlns:{}={}", .{
+                            std.unicode.fmtUtf16le(prefix),
+                            std.unicode.fmtUtf16le(uri),
+                        });
+                    }
+                },
+                .EndElement => |end| {
+                    const name = xml_tree.string_pool.getUtf16(end.name) orelse &[_]u16{};
+                    try std.fmt.format(stdout.writer(), "</{}>", .{std.unicode.fmtUtf16le(name)});
+                },
+                .Attribute => |attribute| {
+                    try std.fmt.format(stdout.writer(), "<", .{});
+                    {
+                        if (xml_tree.string_pool.getUtf16(attribute.namespace)) |ns| {
+                            try std.fmt.format(stdout.writer(), "{}:", .{std.unicode.fmtUtf16le(ns)});
+                        }
+                        if (xml_tree.string_pool.getUtf16(attribute.name)) |name| {
+                            try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
+                        }
+                    }
+                    for (xml_tree.attributes) |attr| {
+                        if (attr.node != node_id) continue;
+                        try std.fmt.format(stdout, "\n", .{});
+                        var iloop2: usize = 1;
+                        while (iloop2 < indent + 1) : (iloop2 += 1) {
+                            try std.fmt.format(stdout, "\t", .{});
+                        }
+                        if (xml_tree.string_pool.getUtf16(attr.namespace)) |ns| {
+                            try std.fmt.format(stdout.writer(), "{}/", .{std.unicode.fmtUtf16le(ns)});
+                        }
+                        if (xml_tree.string_pool.getUtf16(attr.name)) |name| {
+                            try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
+                        }
+                        if (xml_tree.string_pool.getUtf16(attr.raw_value)) |raw| {
+                            try std.fmt.format(stdout.writer(), "={}", .{std.unicode.fmtUtf16le(raw)});
+                        } else {
+                            try std.fmt.format(stdout.writer(), "={s}", .{
+                                @tagName(attr.typed_value.datatype),
+                            });
+                        }
+                    }
+                    try std.fmt.format(stdout.writer(), ">", .{});
+                },
+            }
+            try std.fmt.format(stdout.writer(), "\n", .{});
+            if (node.extended == .EndElement) {
+                indent -= 1;
+            }
+        }
+    }
+
+    // for (archive_reader.directory.items) |cd_record, i| {
+    //     _ = cd_record;
+    //     const header = archive_reader.getHeader(i);
+    //     if (std.mem.eql(u8, header.filename, "AndroidManifest.xml")) {
+    //         _ = try stdout.write("Found AndroidManifest.xml\n");
+    //     }
+    // }
+}
