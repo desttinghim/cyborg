@@ -244,7 +244,7 @@ const StringPool = struct {
                     offset.* = try reader.readInt(u32, .Little);
                 }
 
-                // Copy UTF16 buffer into memory
+                // Copy UTF8 buffer into memory
                 for (string_buf) |*char| {
                     char.* = try reader.readInt(u8, .Little);
                 }
@@ -694,7 +694,7 @@ const ResourceTable = struct {
                         // std.log.info("Table spec type: {?}", .{table_spec_type});
                     },
                     .TableType => {
-                        const table_type = try ResourceTable.TableType.read(reader, package_header, alloc);
+                        const table_type = try ResourceTable.TableType.read(file, pos, package_header, alloc);
                         try table_types.append(table_type);
                         // std.log.info("Table type: {} {?}", .{ pos, table_type });
                     },
@@ -861,7 +861,8 @@ const ResourceTable = struct {
         entry_indices: []u32,
         entries: []Entry,
 
-        fn read(reader: anytype, header: ResourceChunk, alloc: std.mem.Allocator) !TableType {
+        fn read(file: std.fs.File, pos: usize, header: ResourceChunk, alloc: std.mem.Allocator) !TableType {
+            const reader = file.reader();
             var table_type: TableType = undefined;
 
             table_type.header = header;
@@ -875,11 +876,15 @@ const ResourceTable = struct {
             if (table_type.flags & 0x01 != 0) {
                 // Complex flag
             } else {
+                try file.seekTo(pos + table_type.header.header_size);
+                std.log.info("pos {}, header size {}, current_pos {}", .{ pos, table_type.header.header_size, try file.getPos() });
                 table_type.entry_indices = try alloc.alloc(u32, table_type.entry_count);
                 for (table_type.entry_indices) |*entry| {
                     entry.* = try reader.readInt(u32, .Little);
                     std.log.info("table type {}", .{entry.*});
                 }
+                try file.seekTo(pos + table_type.entries_start);
+                std.log.info("pos {}, entries start {}, current_pos {}", .{ pos, table_type.entries_start, try file.getPos() });
                 table_type.entries = try alloc.alloc(Entry, table_type.entry_count);
                 for (table_type.entries) |*entry| {
                     entry.* = try Entry.read(reader);
@@ -909,12 +914,8 @@ const ResourceTable = struct {
             entry.size = try reader.readInt(u16, .Little);
             entry.flags = try reader.readInt(u16, .Little);
             entry.key = try StringPool.Ref.read(reader);
-            if (entry.size > 8) {
-                std.debug.assert(entry.flags & 0x0001 == 0);
-                entry.value = try Value.read(reader);
-            } else {
-                entry.value = null;
-            }
+            std.debug.assert(entry.flags & 0x0001 == 0);
+            entry.value = try Value.read(reader);
 
             return entry;
         }
