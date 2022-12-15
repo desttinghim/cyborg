@@ -877,18 +877,14 @@ const ResourceTable = struct {
                 // Complex flag
             } else {
                 try file.seekTo(pos + table_type.header.header_size);
-                std.log.info("pos {}, header size {}, current_pos {}", .{ pos, table_type.header.header_size, try file.getPos() });
                 table_type.entry_indices = try alloc.alloc(u32, table_type.entry_count);
                 for (table_type.entry_indices) |*entry| {
                     entry.* = try reader.readInt(u32, .Little);
-                    std.log.info("table type {}", .{entry.*});
                 }
                 try file.seekTo(pos + table_type.entries_start);
-                std.log.info("pos {}, entries start {}, current_pos {}", .{ pos, table_type.entries_start, try file.getPos() });
                 table_type.entries = try alloc.alloc(Entry, table_type.entry_count);
                 for (table_type.entries) |*entry| {
                     entry.* = try Entry.read(reader);
-                    std.log.info("table type {}: {?}", .{ entry.key, entry.value });
                 }
             }
 
