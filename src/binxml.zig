@@ -230,7 +230,6 @@ const StringPool = struct {
 
         const data: Data = data: {
             if (header.flags.utf8) {
-                std.log.info("Strings are utf8", .{});
                 const buf_size = (header.header.size - header.header.header_size);
                 const string_buf = try alloc.alloc(u8, buf_size);
 
@@ -388,7 +387,6 @@ const XMLTree = struct {
                 },
             }
             if (pos + resource_header.size >= starting_pos + header.size) {
-                std.log.err("Next chunk outside of xml_tree: {} + {} = {} > {}", .{ pos, resource_header.size, pos + resource_header.size, header.size });
                 break;
             }
             try seek.seekTo(pos + resource_header.size);
@@ -592,7 +590,6 @@ const ResourceTable = struct {
                 },
             }
             if (pos + package_header.size >= starting_pos + header.header.size) {
-                std.log.err("Next chunk outside of table: {} + {} = {} > {}", .{ pos, package_header.size, pos + package_header.size, header.header.size });
                 break;
             }
             try seek.seekTo(pos + package_header.size);
@@ -686,12 +683,10 @@ const ResourceTable = struct {
                     .TableTypeSpec => {
                         const table_spec_type = try ResourceTable.TypeSpec.read(reader, package_header, alloc);
                         try type_specs.append(table_spec_type);
-                        // std.log.info("Table spec type: {?}", .{table_spec_type});
                     },
                     .TableType => {
                         const table_type = try ResourceTable.TableType.read(seek, reader, pos, package_header, alloc);
                         try table_types.append(table_type);
-                        // std.log.info("Table type: {} {?}", .{ pos, table_type });
                     },
                     else => {
                         std.log.info("Found {s} while parsing package", .{@tagName(package_header.type)});
@@ -699,7 +694,6 @@ const ResourceTable = struct {
                     },
                 }
                 if (pos + package_header.size >= starting_pos + header.size) {
-                    std.log.err("Next chunk outside of package: {} + {} = {} > {}", .{ pos, package_header.size, pos + package_header.size, starting_pos + header.size });
                     break;
                 }
                 try seek.seekTo(pos + package_header.size);
@@ -970,7 +964,6 @@ pub const Document = struct {
                 },
             }
             if (pos + header.size >= file_length) {
-                std.log.err("Next chunk outside of file: {} + {} = {} > {}", .{ pos, header.size, pos + header.size, file_length });
                 break;
             }
             try seek.seekTo(pos + header.size);
