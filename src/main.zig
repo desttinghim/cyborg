@@ -87,6 +87,31 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 
     var document = try binxml.Document.readAlloc(file.seekableStream(), file.reader(), arena_alloc);
 
+    try printInfo(document, stdout);
+}
+
+pub fn readApk(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+    const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+    const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
+    const dir = try std.fs.openDirAbsolute(dirpath, .{});
+    const file = try dir.openFile(filepath, .{});
+
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &std.io.StreamSource{ .file = file });
+
+    try archive_reader.load();
+
+    const manifest_header = archive_reader.findFile("AndroidManifest.xml") orelse return error.MissingManifest;
+
+    const manifest_string = try archive_reader.extractFileString(manifest_header, alloc, true);
+    defer alloc.free(manifest_string);
+
+    var stream = std.io.FixedBufferStream([]const u8){ .pos = 0, .buffer = manifest_string };
+    var document = try binxml.Document.readAlloc(stream.seekableStream(), stream.reader(), alloc);
+
+    try printInfo(document, stdout);
+}
+
+fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
     var indent: usize = 0;
 
     for (document.xml_trees) |xml_tree| {
@@ -189,106 +214,4 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
             }
         }
     }
-}
-
-pub fn readApk(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
-    const filepath = try std.fs.realpathAlloc(alloc, args[2]);
-    const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
-    const dir = try std.fs.openDirAbsolute(dirpath, .{});
-    const file = try dir.openFile(filepath, .{});
-
-    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &std.io.StreamSource{ .file = file });
-
-    try archive_reader.load();
-
-    const manifest_header = archive_reader.findFile("AndroidManifest.xml") orelse return error.MissingManifest;
-
-    const manifest_string = try archive_reader.extractFileString(manifest_header, alloc, true);
-    defer alloc.free(manifest_string);
-
-    var stream = std.io.FixedBufferStream([]const u8){ .pos = 0, .buffer = manifest_string };
-    var document = try binxml.Document.readAlloc(stream.seekableStream(), stream.reader(), alloc);
-
-    var indent: usize = 0;
-
-    for (document.xml_trees) |xml_tree| {
-        for (xml_tree.nodes) |node, node_id| {
-            if (node.extended == .Attribute) {
-                indent += 1;
-            }
-            var iloop: usize = 1;
-            while (iloop < indent) : (iloop += 1) {
-                try std.fmt.format(stdout, "\t", .{});
-            }
-            switch (node.extended) {
-                .CData => |cdata| {
-                    const data = xml_tree.string_pool.getUtf16(cdata.data) orelse &[_]u16{};
-
-                    try std.fmt.format(stdout.writer(), "{}", .{
-                        std.unicode.fmtUtf16le(data),
-                    });
-                },
-                .Namespace => |namespace| {
-                    if (node.header.type == .XmlStartNamespace) {
-                        const prefix = xml_tree.string_pool.getUtf16(namespace.prefix) orelse &[_]u16{};
-                        const uri = xml_tree.string_pool.getUtf16(namespace.uri) orelse &[_]u16{};
-
-                        try std.fmt.format(stdout.writer(), "xmlns:{}={}", .{
-                            std.unicode.fmtUtf16le(prefix),
-                            std.unicode.fmtUtf16le(uri),
-                        });
-                    }
-                },
-                .EndElement => |end| {
-                    const name = xml_tree.string_pool.getUtf16(end.name) orelse &[_]u16{};
-                    try std.fmt.format(stdout.writer(), "</{}>", .{std.unicode.fmtUtf16le(name)});
-                },
-                .Attribute => |attribute| {
-                    try std.fmt.format(stdout.writer(), "<", .{});
-                    {
-                        if (xml_tree.string_pool.getUtf16(attribute.namespace)) |ns| {
-                            try std.fmt.format(stdout.writer(), "{}:", .{std.unicode.fmtUtf16le(ns)});
-                        }
-                        if (xml_tree.string_pool.getUtf16(attribute.name)) |name| {
-                            try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
-                        }
-                    }
-                    for (xml_tree.attributes) |attr| {
-                        if (attr.node != node_id) continue;
-                        try std.fmt.format(stdout, "\n", .{});
-                        var iloop2: usize = 1;
-                        while (iloop2 < indent + 1) : (iloop2 += 1) {
-                            try std.fmt.format(stdout, "\t", .{});
-                        }
-                        if (xml_tree.string_pool.getUtf16(attr.namespace)) |ns| {
-                            try std.fmt.format(stdout.writer(), "{}/", .{std.unicode.fmtUtf16le(ns)});
-                        }
-                        if (xml_tree.string_pool.getUtf16(attr.name)) |name| {
-                            try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
-                        }
-                        if (xml_tree.string_pool.getUtf16(attr.raw_value)) |raw| {
-                            try std.fmt.format(stdout.writer(), "={}", .{std.unicode.fmtUtf16le(raw)});
-                        } else {
-                            try std.fmt.format(stdout.writer(), "={s}", .{
-                                @tagName(attr.typed_value.datatype),
-                            });
-                        }
-                    }
-                    try std.fmt.format(stdout.writer(), ">", .{});
-                },
-            }
-            try std.fmt.format(stdout.writer(), "\n", .{});
-            if (node.extended == .EndElement) {
-                indent -= 1;
-            }
-        }
-    }
-
-    // for (archive_reader.directory.items) |cd_record, i| {
-    //     _ = cd_record;
-    //     const header = archive_reader.getHeader(i);
-    //     if (std.mem.eql(u8, header.filename, "AndroidManifest.xml")) {
-    //         _ = try stdout.write("Found AndroidManifest.xml\n");
-    //     }
-    // }
 }
