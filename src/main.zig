@@ -168,24 +168,26 @@ fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
                             try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
                         }
                     }
-                    for (xml_tree.attributes) |attr| {
-                        if (attr.node != node_id) continue;
+                    for (xml_tree.attributes) |*attr| {
+                        if (attr.*.node != node_id) continue;
                         try std.fmt.format(stdout, "\n", .{});
                         var iloop2: usize = 1;
                         while (iloop2 < indent + 1) : (iloop2 += 1) {
                             try std.fmt.format(stdout, "\t", .{});
                         }
-                        if (xml_tree.string_pool.getUtf16(attr.namespace)) |ns| {
+                        if (xml_tree.string_pool.getUtf16(attr.*.namespace)) |ns| {
                             try std.fmt.format(stdout.writer(), "{}/", .{std.unicode.fmtUtf16le(ns)});
                         }
-                        if (xml_tree.string_pool.getUtf16(attr.name)) |name| {
+                        if (xml_tree.string_pool.getUtf16(attr.*.name)) |name| {
                             try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
                         }
-                        if (xml_tree.string_pool.getUtf16(attr.raw_value)) |raw| {
+                        if (xml_tree.string_pool.getUtf16(attr.*.raw_value)) |raw| {
                             try std.fmt.format(stdout.writer(), "={}", .{std.unicode.fmtUtf16le(raw)});
                         } else {
+                            attr.*.typed_value.string_pool = &xml_tree.string_pool;
                             try std.fmt.format(stdout.writer(), "={s}", .{
-                                @tagName(attr.typed_value.datatype),
+                                attr.*.typed_value,
+                                // @tagName(attr.typed_value.datatype),
                             });
                         }
                     }
@@ -219,6 +221,9 @@ fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
                 try std.fmt.format(stdout.writer(), "\tTable Type {}, {}\n", .{ table_type.id, table_type.flags });
                 // try std.fmt.format(stdout.writer(), "\t\tConfig: {}\n", .{table_type.config});
                 for (table_type.entries) |*entry| {
+                    if (entry.*.value) |*value| {
+                        value.*.string_pool = &package.key_string_pool;
+                    }
                     if (package.key_string_pool.getUtf16(entry.key)) |entry_string| {
                         try std.fmt.format(stdout.writer(), "\t\t{}: {?}\n", .{ std.unicode.fmtUtf16le(entry_string), entry.value });
                     }

@@ -131,12 +131,16 @@ const Value = struct {
     datatype: DataType,
     data: u32,
 
-    fn read(reader: anytype) !Value {
+    // Runtime
+    string_pool: ?*const StringPool,
+
+    fn read(reader: anytype, string_pool: ?*StringPool) !Value {
         var value = Value{
             .size = try reader.readInt(u16, .Little),
             .res0 = try reader.readInt(u8, .Little),
             .datatype = @intToEnum(DataType, try reader.readInt(u8, .Little)),
             .data = try reader.readInt(u32, .Little),
+            .string_pool = string_pool,
         };
         return value;
     }
@@ -146,6 +150,77 @@ const Value = struct {
         try writer.writeInt(u8, value.res0, .Little);
         try writer.writeInt(u8, @enumToInt(value.datatype), .Little);
         try writer.writeInt(u32, value.data, .Little);
+    }
+
+    pub fn format(value: Value, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = options;
+        _ = fmt;
+        switch (value.datatype) {
+            .Null => {
+                if (value.data == 0) {
+                    _ = try writer.write("undefined");
+                } else {
+                    _ = try writer.write("empty");
+                }
+            },
+            .Reference => {
+                try std.fmt.format(writer, "reference to {x}", .{value.data});
+            },
+            .Attribute => {
+                try std.fmt.format(writer, "attribute id {}", .{value.data});
+            },
+            .String => {
+                if (value.string_pool) |string_pool| {
+                    if (string_pool.getUtf16Raw(value.data)) |str| {
+                        try std.fmt.format(writer, "\"{}\"", .{std.unicode.fmtUtf16le(str)});
+                    } else if (string_pool.getUtf8Raw(value.data)) |str| {
+                        try std.fmt.format(writer, "\"{s}\"", .{str});
+                    } else {
+                        try std.fmt.format(writer, "empty string {}", .{value.data});
+                    }
+                } else {
+                    try std.fmt.format(writer, "string id {}", .{value.data});
+                }
+            },
+            .Float => {
+                const float = @bitCast(f32, value.data);
+                try std.fmt.format(writer, "float {}", .{float});
+            },
+            .Dimension => {
+                try std.fmt.format(writer, "dimension {x}", .{value.data});
+            },
+            .Fraction => {
+                try std.fmt.format(writer, "fraction {x}", .{value.data});
+            },
+            .DynReference => {
+                try std.fmt.format(writer, "dynamic reference {x}", .{value.data});
+            },
+            .DynAttribute => {
+                try std.fmt.format(writer, "dynamic attribute {x}", .{value.data});
+            },
+            .IntDec => {
+                try std.fmt.format(writer, "integer decimal: {}", .{value.data});
+            },
+            .IntHex => {
+                try std.fmt.format(writer, "integer hex: {x}", .{value.data});
+            },
+            .IntBool => {
+                const bool_value = if (value.data == 0) "false" else "true";
+                try std.fmt.format(writer, "int bool: {} ({s})", .{ value.data, bool_value });
+            },
+            .IntColorARGB8 => {
+                try std.fmt.format(writer, "argb8 color: {x}", .{value.data});
+            },
+            .IntColorRGB8 => {
+                try std.fmt.format(writer, "rgb8 color: {x}", .{value.data});
+            },
+            .IntColorARGB4 => {
+                try std.fmt.format(writer, "argb4 color: {x}", .{value.data});
+            },
+            .IntColorRGB4 => {
+                try std.fmt.format(writer, "rgb4 color: {x}", .{value.data});
+            },
+        }
     }
 };
 
@@ -216,13 +291,25 @@ const StringPool = struct {
     };
 
     pub fn getUtf16(self: StringPool, refe: Ref) ?[]const u16 {
-        if (self.header.flags.utf8 or refe.index == std.math.maxInt(u32)) return null;
-        return self.data.Utf16.slices[refe.index];
+        // if (self.header.flags.utf8 or refe.index == std.math.maxInt(u32)) return null;
+        // return self.data.Utf16.slices[refe.index];
+        return self.getUtf16Raw(refe.index);
     }
 
     pub fn getUtf8(self: StringPool, refe: Ref) ?[]const u8 {
-        if (self.header.flags.utf8 or refe.index == std.math.maxInt(u32)) return null;
-        return self.data.Utf8.slices[refe.index];
+        // if (!self.header.flags.utf8 or refe.index == std.math.maxInt(u32)) return null;
+        // return self.data.Utf8.slices[refe.index];
+        return self.getUtf8Raw(refe.index);
+    }
+
+    pub fn getUtf16Raw(self: StringPool, index: u32) ?[]const u16 {
+        if (self.header.flags.utf8 or index == std.math.maxInt(u32)) return null;
+        return self.data.Utf16.slices[index];
+    }
+
+    pub fn getUtf8Raw(self: StringPool, index: u32) ?[]const u8 {
+        if (!self.header.flags.utf8 or index == std.math.maxInt(u32)) return null;
+        return self.data.Utf8.slices[index];
     }
 
     pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !StringPool {
@@ -458,7 +545,7 @@ const XMLTree = struct {
         pub fn read(reader: anytype) !CDataExtended {
             return CDataExtended{
                 .data = try StringPool.Ref.read(reader),
-                .value = try Value.read(reader),
+                .value = try Value.read(reader, null),
             };
         }
         pub fn write(cdata: CDataExtended, writer: anytype) !void {
@@ -547,7 +634,7 @@ const XMLTree = struct {
                 .namespace = try StringPool.Ref.read(reader),
                 .name = try StringPool.Ref.read(reader),
                 .raw_value = try StringPool.Ref.read(reader),
-                .typed_value = try Value.read(reader),
+                .typed_value = try Value.read(reader, null),
                 .node = node,
             };
         }
@@ -899,7 +986,7 @@ const ResourceTable = struct {
             entry.flags = try reader.readInt(u16, .Little);
             entry.key = try StringPool.Ref.read(reader);
             std.debug.assert(entry.flags & 0x0001 == 0);
-            entry.value = try Value.read(reader);
+            entry.value = try Value.read(reader, null);
 
             return entry;
         }
