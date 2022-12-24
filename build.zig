@@ -1,6 +1,7 @@
 const std = @import("std");
+const libxml2 = @import("dep/zig-libxml2/libxml2.zig");
 
-pub fn build(b: *std.build.Builder) void {
+pub fn build(b: *std.build.Builder) !void {
     // Standard target options allows the person running `zig build` to choose
     // what target to build for. Here we do not override the defaults, which
     // means any target is allowed, and the default is native. Other options
@@ -16,9 +17,16 @@ pub fn build(b: *std.build.Builder) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
     const mode = b.standardReleaseOptions();
 
+    const xml = try libxml2.create(b, target, mode, .{
+        .iconv = false,
+        .lzma = false,
+        .zlib = false,
+    });
+
     const lib = b.addStaticLibrary("zandroid", "src/main.zig");
     lib.addPackage(zig_archive);
     lib.setBuildMode(mode);
+    xml.link(lib);
     lib.install();
 
     const main_tests = b.addTest("src/main.zig");
@@ -31,6 +39,7 @@ pub fn build(b: *std.build.Builder) void {
     exe.addPackage(zig_archive);
     exe.setBuildMode(mode);
     exe.setTarget(target);
+    xml.link(exe);
     exe.install();
 
     const run_cmd = exe.run();

@@ -2,6 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const archive = @import("archive");
 
+const c = @import("c.zig");
 pub const dex = @import("dex.zig");
 pub const binxml = @import("binxml.zig");
 pub const manifest = @import("manifest.zig");
@@ -23,6 +24,7 @@ const usage =
 const Subcommand = enum {
     zip,
     xml,
+    binxml,
     apk,
     dex,
     // pkg,
@@ -54,11 +56,48 @@ pub fn run(stdout: std.fs.File) !void {
 
     switch (cmd) {
         .zip => try readZip(alloc, args, stdout),
+        .binxml => try readBinXml(alloc, args, stdout),
         .xml => try readXml(alloc, args, stdout),
         .apk => try readApk(alloc, args, stdout),
         .dex => try readDex(alloc, args, stdout),
         // .pkg => try writePackage(alloc, args, stdout),
     }
+}
+
+pub fn print_element_names(stdout: std.fs.File, a_node: ?*c.xmlNode, depth: usize) !void {
+    var cur_node = a_node;
+    while (cur_node) |node| : (cur_node = node.next) {
+        if (node.type == c.XML_ELEMENT_NODE) {
+            var i: usize = 0;
+            while (i < depth) : (i += 1) {
+                _ = try stdout.writer().write("\t");
+            }
+            try std.fmt.format(stdout.writer(), "node type: Element, name: {s}\n", .{node.name});
+        }
+        try print_element_names(stdout, node.children, depth + 1);
+    }
+}
+
+pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+    // const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+    // const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
+    // const dir = try std.fs.openDirAbsolute(dirpath, .{});
+    // const file = try dir.openFile(filepath, .{});
+    _ = alloc;
+
+    // c.LIBXML_TEST_VERSION;
+
+    var xml_doc = c.xmlReadFile(args[2].ptr, null, 0);
+    defer {
+        c.xmlFreeDoc(xml_doc);
+        c.xmlCleanupParser();
+    }
+    if (xml_doc == null) {
+        try std.fmt.format(stdout.writer(), "error: could not parse file {s}\n", .{args[2]});
+    }
+
+    var root_element = c.xmlDocGetRootElement(xml_doc);
+    try print_element_names(stdout, root_element, 0);
 }
 
 pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
@@ -79,7 +118,7 @@ pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     }
 }
 
-pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+pub fn readBinXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
     var arena = std.heap.ArenaAllocator.init(alloc);
     const arena_alloc = arena.allocator();
     defer arena.deinit();
