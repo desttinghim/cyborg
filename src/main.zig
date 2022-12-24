@@ -15,6 +15,7 @@ const usage =
     \\  zip <file> <filename>       Reads the contents of a file from a zip file
     \\  xml <file>                  Reads an Android binary XML file
     \\  apk <file>                  Reads the AndroidManifest.xml in the indicated apk
+    \\  dex <file>                  Reads a Dalvik EXecutable file
     // \\  pkg <manifest> <out>        Creates an APK from a manifest.json
     \\
 ;
@@ -23,6 +24,7 @@ const Subcommand = enum {
     zip,
     xml,
     apk,
+    dex,
     // pkg,
 };
 
@@ -54,6 +56,7 @@ pub fn run(stdout: std.fs.File) !void {
         .zip => try readZip(alloc, args, stdout),
         .xml => try readXml(alloc, args, stdout),
         .apk => try readApk(alloc, args, stdout),
+        .dex => try readDex(alloc, args, stdout),
         // .pkg => try writePackage(alloc, args, stdout),
     }
 }
@@ -80,6 +83,7 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     var arena = std.heap.ArenaAllocator.init(alloc);
     const arena_alloc = arena.allocator();
     defer arena.deinit();
+
     const filepath = try std.fs.realpathAlloc(alloc, args[2]);
     const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
@@ -121,6 +125,16 @@ pub fn readApk(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     var resource_document = try binxml.Document.readAlloc(resource_stream.seekableStream(), resource_stream.reader(), alloc);
 
     try printInfo(resource_document, stdout);
+}
+
+pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+    const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+    const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
+    const dir = try std.fs.openDirAbsolute(dirpath, .{});
+    const file = try dir.openFile(filepath, .{});
+
+    var classes = try dex.Dex.readAlloc(file.seekableStream(), file.reader(), alloc);
+    try std.fmt.format(stdout.writer(), "{}", .{classes.header});
 }
 
 fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {

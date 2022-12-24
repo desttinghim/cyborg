@@ -1,5 +1,7 @@
 //! The DEX executable file format.
 
+const std = @import("std");
+
 const Ops = enum(u16) {
     /// Waste cycles
     nop = 0x00_10,
@@ -400,7 +402,7 @@ const Leb128 = struct {
 };
 
 /// DEX file layout
-const Dex = struct {
+pub const Dex = struct {
     /// the header
     header: HeaderItem,
     /// string identifiers list. These are identifiers for all the strings used by this file, either for internal naming (e.g. type descriptors) or as constant objects referred to by code. This list must be sorted by string contents, using UTF-16 code point values (not in a locale-sensitive manner), and it must not contain any duplicate entries.
@@ -414,14 +416,35 @@ const Dex = struct {
     method_handles: []MethodHandleItem,
     data: []u8,
     link_data: []u8,
+
+    pub fn readAlloc(seek: anytype, reader: anytype, allocator: std.mem.Allocator) !Dex {
+        var dex: Dex = undefined;
+        dex.header = try HeaderItem.read(seek, reader);
+        const map_list = try MapList.read(dex.header, seek, reader, allocator);
+        for (map_list.list) |list_item| {
+            std.log.info("{}", .{list_item});
+        }
+        return dex;
+    }
 };
 
 /// Magic bytes that identify a DEX file
-const DEX_FILE_MAGIC: [8]u8 = "dex\n039\x00";
-/// Constant used to identify the endianness of the file
-const ENDIAN_CONSTANT: u32 = 0x12345678;
-/// Constant used to identify the endianness of the file
-const REVERSE_ENDIAN_CONSTANT: u32 = 0x78563412;
+const DEX_FILE_MAGIC = "dex\n";
+const Version = enum(u32) {
+    @"039" = 0x03_33_39_00,
+    @"038" = 0x03_33_38_00,
+    @"037" = 0x03_33_37_00,
+    @"036" = 0x03_33_36_00,
+    @"035" = 0x03_33_35_00,
+};
+
+const Endianness = enum(u32) {
+    /// Constant used to identify the endianness of the file
+    Endian = 0x12345678,
+    /// Constant used to identify the endianness of the file
+    ReverseEndian = 0x78563412,
+    _,
+};
 /// Value to represent null indexes
 const NO_INDEX: u32 = 0xffffffff;
 
@@ -498,7 +521,9 @@ const AnnotationElement = struct {
 
 const HeaderItem = struct {
     /// Magic value
-    magic: [8]u8 = DEX_FILE_MAGIC,
+    magic: [4]u8,
+    /// Dex file format version
+    version: Version,
     /// adler32 checksum of the rest of the file (everything but magic and this field); used to detect file corruption
     checksum: u32,
     /// SHA-1 signature (hash) of the rest of the file (everything but magic, checksum, and this field); used to uniquely identify files
@@ -508,30 +533,129 @@ const HeaderItem = struct {
     /// size of the header (this entire section), in bytes. This allows for at least a limited amount of backwards/forwards compatibility without invalidating the format
     header_size: u32 = 0x70,
     /// endianness tag. Either `ENDIAN_CONSTANT` or `REVERSE_ENDIAN_CONSTANT`
-    endian_tag: u32 = ENDIAN_CONSTANT,
+    endian_tag: Endianness = .Endian,
     /// size of the link section, or 0 if this file isn't statically linked
     link_size: u32,
-    /// offset from
+    /// offset from the start of the file to the link section, or 0 if `link_size == 0`. The
+    /// offset, if non-zero, should be to an offset into the `link_data` section. The format of
+    /// the data pointed at is left unspecified by this document; this header field (and the
+    /// previous) are left as hooks for use by runtime implementations
     link_off: u32,
+    /// offset from the start of the file to the map item. The offset, which must be non-zero,
+    /// should be to an offset into the data section, and the data should be in the format
+    /// specified by "`map_list`" below.
     map_off: u32,
+    /// count of strings in the string identifiers list
     string_ids_size: u32,
+    /// offset from the start of the file to the string identifiers list or `0` if `string_ids_size == 0`
+    /// (admittedly a strange edge case). The offset, if non-zero, should be to the
+    /// start of the `string_ids` section.
     string_ids_off: u32,
+    /// count of the elements in the type identifiers list, at most 65535
     type_ids_size: u32,
+    /// offset from the start of the file to the type identifiers list or `0` if `type_ids_size == 0`
+    /// (admittedly a strange edge case). The offset, if non-zero, should be to the
+    /// start of the `type_ids` section.
     type_ids_off: u32,
+    /// count of the elements in the prototype identifiers list, at most 65535
+    proto_ids_size: u32,
+    /// offset from the start of the file to the prototype list or `0` if `proto_ids_size == 0`
+    /// (admittedly a strange edge case). The offset, if non-zero, should be to the
+    /// start of the `proto_ids` section.
     proto_ids_off: u32,
+    /// count of the elements in the field identifiers list
     field_ids_size: u32,
-    fields_ids_off: u32,
+    /// offset from the start of the file to the field list or `0` if `field_ids_size == 0`.
+    /// The offset, if non-zero, should be to the start of the `field_ids` section.
+    field_ids_off: u32,
+    /// count of the elements in the method identifiers list
     method_ids_size: u32,
+    /// offset from the start of the file to the method list or `0` if `method_ids_size == 0`.
+    /// The offset, if non-zero, should be to the start of the `method_ids` section.
     method_ids_off: u32,
+    /// count of the elements in the class identifiers list
     class_defs_size: u32,
+    /// offset from the start of the file to the class list or `0` if `class_ids_size == 0`
+    /// (admittedly a strange edge case). The offset, if non-zero, should be to the
+    /// start of the `class_defs` section.
     class_defs_off: u32,
+    /// Size of the data section in bytes. Must be an even multiple of sizeof(uint).
     data_size: u32,
+    /// offset from the start of the file to the start of the data section.
     data_off: u32,
+
+    pub fn read(seek: anytype, reader: anytype) !HeaderItem {
+        _ = seek;
+        var header: HeaderItem = undefined;
+
+        if (try reader.read(&header.magic) != header.magic.len) return error.UnexpectedEOF;
+        if (!std.mem.eql(u8, header.magic[0..], DEX_FILE_MAGIC[0..])) {
+            std.log.info("Header magic bytes were 0x{}, expected 0x{}", .{ std.fmt.fmtSliceHexLower(header.magic[0..]), std.fmt.fmtSliceHexLower(DEX_FILE_MAGIC[0..]) });
+            return error.InvalidMagicBytes;
+        }
+
+        var version_buf: [4]u8 = undefined;
+        if (try reader.read(&version_buf) != 4) return error.UnexpectedEOF;
+        if (std.mem.eql(u8, &version_buf, "035\x00")) {
+            header.version = .@"035";
+        } else if (std.mem.eql(u8, &version_buf, "036\x00")) {
+            header.version = .@"036";
+        } else if (std.mem.eql(u8, &version_buf, "037\x00")) {
+            header.version = .@"037";
+        } else if (std.mem.eql(u8, &version_buf, "038\x00")) {
+            header.version = .@"038";
+        } else if (std.mem.eql(u8, &version_buf, "039\x00")) {
+            header.version = .@"039";
+        } else {
+            return error.UnknownFormatVersion;
+        }
+
+        // TODO: compute checksum and compare
+        header.checksum = try reader.readInt(u32, .Little);
+
+        if (try reader.read(&header.signature) != header.signature.len) return error.UnexpectedEOF;
+
+        header.file_size = try reader.readInt(u32, .Little);
+        header.header_size = try reader.readInt(u32, .Little);
+        if (header.header_size != 0x70) return error.UnexpectedHeaderSize;
+        header.endian_tag = try reader.readEnum(Endianness, .Little);
+        header.link_size = try reader.readInt(u32, .Little);
+        header.link_off = try reader.readInt(u32, .Little);
+        header.map_off = try reader.readInt(u32, .Little);
+        header.string_ids_size = try reader.readInt(u32, .Little);
+        header.string_ids_off = try reader.readInt(u32, .Little);
+        header.type_ids_size = try reader.readInt(u32, .Little);
+        header.type_ids_off = try reader.readInt(u32, .Little);
+        header.proto_ids_size = try reader.readInt(u32, .Little);
+        header.proto_ids_off = try reader.readInt(u32, .Little);
+        header.field_ids_size = try reader.readInt(u32, .Little);
+        header.field_ids_off = try reader.readInt(u32, .Little);
+        header.method_ids_size = try reader.readInt(u32, .Little);
+        header.method_ids_off = try reader.readInt(u32, .Little);
+        header.class_defs_size = try reader.readInt(u32, .Little);
+        header.class_defs_off = try reader.readInt(u32, .Little);
+
+        return header;
+    }
 };
 
 const MapList = struct {
     size: u32,
     list: []MapItem,
+
+    pub fn read(header: HeaderItem, seek: anytype, reader: anytype, allocator: std.mem.Allocator) !MapList {
+        try seek.seekTo(header.map_off);
+        const size = try reader.readInt(u32, .Little);
+        var list = try allocator.alloc(MapItem, size);
+        errdefer allocator.free(list);
+        for (list) |*map_item| {
+            map_item.* = try MapItem.read(reader);
+        }
+        return .{
+            .size = size,
+            .list = list,
+        };
+    }
 };
 
 const MapItem = struct {
@@ -539,6 +663,15 @@ const MapItem = struct {
     _unused: u16,
     size: u32,
     offset: u32,
+
+    pub fn read(reader: anytype) !MapItem {
+        return MapItem{
+            .type = try reader.readEnum(TypeCode, .Little),
+            ._unused = try reader.readInt(u16, .Little),
+            .size = try reader.readInt(u32, .Little),
+            .offset = try reader.readInt(u32, .Little),
+        };
+    }
 };
 
 const TypeCode = enum(u16) {
@@ -606,7 +739,6 @@ const ClassDefItem = struct {
     class_idx: u32,
     access_flags: u32,
     superclass_idx: u32,
-    interfaces_off: u32,
     interfaces_off: u32,
     source_file_idx: u32,
     annotations_off: u32,
