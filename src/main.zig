@@ -135,6 +135,43 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 
     var classes = try dex.Dex.readAlloc(file.seekableStream(), file.reader(), alloc);
     try std.fmt.format(stdout.writer(), "{}", .{classes.header});
+
+    for (classes.map_list.list) |list_item| {
+        std.log.info("{}", .{list_item});
+    }
+
+    for (classes.string_ids) |id, i| {
+        const str = try classes.getString(id);
+        std.log.info("String {}: {s}", .{ i, str.data });
+    }
+
+    for (classes.type_ids) |id, i| {
+        const str = try classes.getString(classes.string_ids[id.descriptor_idx]);
+        std.log.info("Type {} descriptor: {s}", .{ i, str.data });
+    }
+
+    for (classes.proto_ids) |id, i| {
+        const shorty_str = try classes.getString(classes.string_ids[id.shorty_idx]);
+        const return_type = try classes.getString(classes.string_ids[classes.type_ids[id.return_type_idx].descriptor_idx]);
+        std.log.info("Prototype {} shorty: {s}, return type: {s}, parameter offset: {}", .{ i, shorty_str.data, return_type.data, id.parameters_off });
+    }
+
+    for (classes.field_ids) |id, i| {
+        const class_str = try classes.getString(classes.string_ids[classes.type_ids[id.class_idx].descriptor_idx]);
+        const type_str = try classes.getString(classes.string_ids[classes.type_ids[id.type_idx].descriptor_idx]);
+        const name_str = try classes.getString(classes.string_ids[id.name_idx]);
+        std.log.info("Field {}, {s}.{s}: {s},", .{ i, class_str.data, name_str.data, type_str.data });
+    }
+
+    for (classes.method_ids) |id, i| {
+        const class_str = try classes.getString(classes.string_ids[classes.type_ids[id.class_idx].descriptor_idx]);
+        const name_str = try classes.getString(classes.string_ids[id.name_idx]);
+        std.log.info("Method {}, {s}.{s}, proto {}", .{ i, class_str.data, name_str.data, id.proto_idx });
+    }
+
+    for (classes.class_defs) |def| {
+        std.log.info("{}", .{def});
+    }
 }
 
 fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {

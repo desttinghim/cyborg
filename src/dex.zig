@@ -416,15 +416,88 @@ pub const Dex = struct {
     method_handles: []MethodHandleItem,
     data: []u8,
     link_data: []u8,
+    map_list: MapList,
 
     pub fn readAlloc(seek: anytype, reader: anytype, allocator: std.mem.Allocator) !Dex {
         var dex: Dex = undefined;
+
+        // Read the header
         dex.header = try HeaderItem.read(seek, reader);
-        const map_list = try MapList.read(dex.header, seek, reader, allocator);
-        for (map_list.list) |list_item| {
-            std.log.info("{}", .{list_item});
+
+        // Read the string id list
+        try seek.seekTo(dex.header.string_ids_off);
+        dex.string_ids = try allocator.alloc(StringIdItem, dex.header.string_ids_size);
+        for (dex.string_ids) |*id| {
+            id.* = try StringIdItem.read(reader);
         }
+
+        // Read the type id list
+        try seek.seekTo(dex.header.type_ids_off);
+        dex.type_ids = try allocator.alloc(TypeIdItem, dex.header.type_ids_size);
+        for (dex.type_ids) |*id| {
+            id.* = try TypeIdItem.read(reader);
+        }
+
+        // Read the proto id list
+        try seek.seekTo(dex.header.proto_ids_off);
+        dex.proto_ids = try allocator.alloc(ProtoIdItem, dex.header.proto_ids_size);
+        for (dex.proto_ids) |*id| {
+            id.* = try ProtoIdItem.read(reader);
+        }
+
+        // Read the field id list
+        try seek.seekTo(dex.header.field_ids_off);
+        dex.field_ids = try allocator.alloc(FieldIdItem, dex.header.field_ids_size);
+        for (dex.field_ids) |*id| {
+            id.* = try FieldIdItem.read(reader);
+        }
+
+        // Read the method id list
+        try seek.seekTo(dex.header.method_ids_off);
+        dex.method_ids = try allocator.alloc(MethodIdItem, dex.header.method_ids_size);
+        for (dex.method_ids) |*id| {
+            id.* = try MethodIdItem.read(reader);
+        }
+
+        // Read the class def list
+        try seek.seekTo(dex.header.class_defs_off);
+        dex.class_defs = try allocator.alloc(ClassDefItem, dex.header.class_defs_size);
+        for (dex.class_defs) |*def| {
+            def.* = try ClassDefItem.read(reader);
+        }
+
+        // TODO?
+        // dex.call_site_ids = ;
+        // dex.method_handles = ;
+
+        // Read data into buffer
+        try seek.seekTo(dex.header.data_off);
+        dex.data = try allocator.alloc(u8, dex.header.data_size);
+        const amount = try reader.read(dex.data);
+        if (amount != dex.header.data_size) {
+            std.log.err("read {} bytes into dex.data", .{amount});
+            return error.UnexpectedEOF;
+        }
+
+        // TODO?
+        // dex.link_data = ;
+
+        // Read the file map
+        dex.map_list = try MapList.read(dex.header, seek, reader, allocator);
+
         return dex;
+    }
+
+    pub fn getString(dex: Dex, id: StringIdItem) !StringDataItem {
+        const offset = id.string_data_off - dex.header.data_off;
+        var fbs = std.io.fixedBufferStream(dex.data[offset..]);
+        const reader = fbs.reader();
+        const codepoints = try std.leb.readULEB128(u32, reader);
+        const data = std.mem.sliceTo(dex.data[offset..], 0);
+        return StringDataItem{
+            .utf16_size = codepoints,
+            .data = data,
+        };
     }
 };
 
@@ -533,7 +606,7 @@ const HeaderItem = struct {
     /// size of the header (this entire section), in bytes. This allows for at least a limited amount of backwards/forwards compatibility without invalidating the format
     header_size: u32 = 0x70,
     /// endianness tag. Either `ENDIAN_CONSTANT` or `REVERSE_ENDIAN_CONSTANT`
-    endian_tag: Endianness = .Endian,
+    endian_tag: std.builtin.Endian,
     /// size of the link section, or 0 if this file isn't statically linked
     link_size: u32,
     /// offset from the start of the file to the link section, or 0 if `link_size == 0`. The
@@ -618,7 +691,7 @@ const HeaderItem = struct {
         header.file_size = try reader.readInt(u32, .Little);
         header.header_size = try reader.readInt(u32, .Little);
         if (header.header_size != 0x70) return error.UnexpectedHeaderSize;
-        header.endian_tag = try reader.readEnum(Endianness, .Little);
+        header.endian_tag = if (try reader.readEnum(Endianness, .Little) == .Endian) .Little else .Big;
         header.link_size = try reader.readInt(u32, .Little);
         header.link_off = try reader.readInt(u32, .Little);
         header.map_off = try reader.readInt(u32, .Little);
@@ -634,6 +707,8 @@ const HeaderItem = struct {
         header.method_ids_off = try reader.readInt(u32, .Little);
         header.class_defs_size = try reader.readInt(u32, .Little);
         header.class_defs_off = try reader.readInt(u32, .Little);
+        header.data_size = try reader.readInt(u32, .Little);
+        header.data_off = try reader.readInt(u32, .Little);
 
         return header;
     }
@@ -700,6 +775,12 @@ const TypeCode = enum(u16) {
 
 const StringIdItem = struct {
     string_data_off: u32,
+
+    pub fn read(reader: anytype) !StringIdItem {
+        return StringIdItem{
+            .string_data_off = try reader.readInt(u32, .Little),
+        };
+    }
 };
 
 const StringDataItem = struct {
@@ -712,6 +793,11 @@ const StringDataItem = struct {
 const TypeIdItem = struct {
     /// index into the string_ids list for the descriptor string of this type. The string must conform to the syntax for TypeDescriptor, defined above.
     descriptor_idx: u32,
+    pub fn read(reader: anytype) !TypeIdItem {
+        return TypeIdItem{
+            .descriptor_idx = try reader.readInt(u32, .Little),
+        };
+    }
 };
 
 const ProtoIdItem = struct {
@@ -721,18 +807,41 @@ const ProtoIdItem = struct {
     return_type_idx: u32,
     /// offset from the start of the file to the list of the parameter types for this prototype, or 0 if this prototype has no parameters. This offset, if non-zero, should be in the data section, and the data there should be in the format specified by the "type_list" below. Additionally, there should be no reference to the type void in the list.
     parameters_off: u32,
+
+    pub fn read(reader: anytype) !@This() {
+        return @This(){
+            .shorty_idx = try reader.readInt(u32, .Little),
+            .return_type_idx = try reader.readInt(u32, .Little),
+            .parameters_off = try reader.readInt(u32, .Little),
+        };
+    }
 };
 
 const FieldIdItem = struct {
     class_idx: u16,
     type_idx: u16,
     name_idx: u32,
+    pub fn read(reader: anytype) !@This() {
+        return @This(){
+            .class_idx = try reader.readInt(u16, .Little),
+            .type_idx = try reader.readInt(u16, .Little),
+            .name_idx = try reader.readInt(u32, .Little),
+        };
+    }
 };
 
 const MethodIdItem = struct {
     class_idx: u16,
     proto_idx: u16,
     name_idx: u32,
+
+    pub fn read(reader: anytype) !@This() {
+        return @This(){
+            .class_idx = try reader.readInt(u16, .Little),
+            .proto_idx = try reader.readInt(u16, .Little),
+            .name_idx = try reader.readInt(u32, .Little),
+        };
+    }
 };
 
 const ClassDefItem = struct {
@@ -744,10 +853,28 @@ const ClassDefItem = struct {
     annotations_off: u32,
     class_data_off: u32,
     static_values_off: u32,
+
+    pub fn read(reader: anytype) !@This() {
+        return @This(){
+            .class_idx = try reader.readInt(u32, .Little),
+            .access_flags = try reader.readInt(u32, .Little),
+            .superclass_idx = try reader.readInt(u32, .Little),
+            .interfaces_off = try reader.readInt(u32, .Little),
+            .source_file_idx = try reader.readInt(u32, .Little),
+            .annotations_off = try reader.readInt(u32, .Little),
+            .class_data_off = try reader.readInt(u32, .Little),
+            .static_values_off = try reader.readInt(u32, .Little),
+        };
+    }
 };
 
 const CallSiteIdItem = struct {
     call_site_off: u32,
+    pub fn read(reader: anytype) !@This() {
+        return @This(){
+            .call_site_off = try reader.readInt(u32, .Little),
+        };
+    }
 };
 
 /// Appears in the data section
