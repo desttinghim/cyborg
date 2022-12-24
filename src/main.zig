@@ -184,7 +184,7 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         const class = try classes.getTypeString(classes.type_ids[def.class_idx]);
         const superclass = if (def.superclass_idx == dex.NO_INDEX) "null" else (try classes.getTypeString(classes.type_ids[def.superclass_idx])).data;
         const file_name = try classes.getString(classes.string_ids[def.source_file_idx]);
-        try std.fmt.format(stdout.writer(), "Class {s} extends {s} defined in {s}\n", .{ class.data, superclass, file_name.data });
+        try std.fmt.format(stdout.writer(), "{} Class {s} extends {s} defined in {s}\n", .{ def.access_flags, class.data, superclass, file_name.data });
     }
 }
 

@@ -577,6 +577,31 @@ const AccessFlags = packed struct(u32) {
     _unused: bool,
     Constructor: bool,
     DeclaredSynchronized: bool,
+    _unused2: u12,
+
+    pub fn format(access_flags: AccessFlags, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
+        _ = fmt;
+        _ = options;
+        if (access_flags.Public) _ = try writer.write("public");
+        if (access_flags.Private) _ = try writer.write(" private");
+        if (access_flags.Protected) _ = try writer.write(" protected");
+        if (access_flags.Static) _ = try writer.write(" static");
+        if (access_flags.Final) _ = try writer.write(" final");
+        if (access_flags.Synchronized) _ = try writer.write(" synchronized");
+        if (access_flags.Volatile) _ = try writer.write(" volatile");
+        if (access_flags.Bridge) _ = try writer.write(" bridge");
+        if (access_flags.Transient) _ = try writer.write(" transient");
+        if (access_flags.Varargs) _ = try writer.write(" varargs");
+        if (access_flags.Native) _ = try writer.write(" native");
+        if (access_flags.Interface) _ = try writer.write(" interface");
+        if (access_flags.Abstract) _ = try writer.write(" abstract");
+        if (access_flags.Strict) _ = try writer.write(" strict");
+        if (access_flags.Synthetic) _ = try writer.write(" synthetic");
+        if (access_flags.Annotation) _ = try writer.write(" annotation");
+        if (access_flags.Enum) _ = try writer.write(" enum");
+        if (access_flags.Constructor) _ = try writer.write(" constructor");
+        if (access_flags.DeclaredSynchronized) _ = try writer.write(" declared synchronized");
+    }
 };
 
 const EncodedValue = struct {
@@ -881,7 +906,7 @@ const MethodIdItem = struct {
 
 const ClassDefItem = struct {
     class_idx: u32,
-    access_flags: u32,
+    access_flags: AccessFlags,
     superclass_idx: u32,
     interfaces_off: u32,
     source_file_idx: u32,
@@ -892,7 +917,7 @@ const ClassDefItem = struct {
     pub fn read(reader: anytype) !@This() {
         return @This(){
             .class_idx = try reader.readInt(u32, .Little),
-            .access_flags = try reader.readInt(u32, .Little),
+            .access_flags = @bitCast(AccessFlags, try reader.readInt(u32, .Little)),
             .superclass_idx = try reader.readInt(u32, .Little),
             .interfaces_off = try reader.readInt(u32, .Little),
             .source_file_idx = try reader.readInt(u32, .Little),
