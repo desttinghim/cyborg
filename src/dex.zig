@@ -350,6 +350,7 @@ const Ops = enum(u16) {
     invoke_custom_range = 0xfd_30,
     const_method_handle = 0xfe_21,
     const_method_type = 0xff_21,
+    _,
 };
 
 const PackedSwitchPayload = struct {
@@ -553,7 +554,7 @@ const Endianness = enum(u32) {
     _,
 };
 /// Value to represent null indexes
-const NO_INDEX: u32 = 0xffffffff;
+pub const NO_INDEX: u32 = 0xffffffff;
 
 const AccessFlags = packed struct(u32) {
     Public: bool,
