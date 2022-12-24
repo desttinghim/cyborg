@@ -499,6 +499,40 @@ pub const Dex = struct {
             .data = data,
         };
     }
+
+    pub fn getTypeString(dex: Dex, id: TypeIdItem) !StringDataItem {
+        const descriptor_idx = id.descriptor_idx;
+        if (descriptor_idx > dex.string_ids.len) return error.TypeStringOutOfBounds;
+        return dex.getString(dex.string_ids[descriptor_idx]);
+    }
+
+    pub fn getPrototype(dex: Dex, id: ProtoIdItem, allocator: std.mem.Allocator) !Prototype {
+        const parameters = if (id.parameters_off == 0) null else parameters: {
+            const offset = id.parameters_off - dex.header.data_off;
+            var fbs = std.io.fixedBufferStream(dex.data[offset..]);
+            const reader = fbs.reader();
+            break :parameters try TypeList.read(reader, allocator);
+        };
+        return Prototype{
+            .shorty = try dex.getString(dex.string_ids[id.shorty_idx]),
+            .return_type = try dex.getTypeString(dex.type_ids[id.return_type_idx]),
+            .parameters = parameters,
+        };
+    }
+
+    pub fn getTypeStringList(dex: Dex, type_list: TypeList, allocator: std.mem.Allocator) ![]StringDataItem {
+        var string_list = try allocator.alloc(StringDataItem, type_list.size);
+        for (type_list.list) |type_item, i| {
+            string_list[i] = try dex.getTypeString(dex.type_ids[type_item.type_idx]);
+        }
+        return string_list;
+    }
+};
+
+const Prototype = struct {
+    shorty: StringDataItem,
+    return_type: StringDataItem,
+    parameters: ?TypeList,
 };
 
 /// Magic bytes that identify a DEX file
@@ -943,10 +977,29 @@ const EncodedMethod = struct {
 const TypeList = struct {
     size: u32,
     list: []TypeItem,
+
+    pub fn read(reader: anytype, allocator: std.mem.Allocator) !TypeList {
+        const size = try reader.readInt(u32, .Little);
+        var list = try allocator.alloc(TypeItem, size);
+        errdefer allocator.free(list);
+        for (list) |*type_item| {
+            type_item.* = try TypeItem.read(reader);
+        }
+        return .{
+            .size = size,
+            .list = list,
+        };
+    }
 };
 
 const TypeItem = struct {
     type_idx: u16,
+
+    pub fn read(reader: anytype) !TypeItem {
+        return TypeItem{
+            .type_idx = try reader.readInt(u16, .Little),
+        };
+    }
 };
 
 const CodeItem = struct {

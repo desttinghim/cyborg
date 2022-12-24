@@ -134,39 +134,50 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const file = try dir.openFile(filepath, .{});
 
     var classes = try dex.Dex.readAlloc(file.seekableStream(), file.reader(), alloc);
-    try std.fmt.format(stdout.writer(), "{}", .{classes.header});
 
     for (classes.map_list.list) |list_item| {
-        std.log.info("{}", .{list_item});
+        try std.fmt.format(stdout.writer(), "{}\n", .{list_item});
     }
 
     for (classes.string_ids) |id, i| {
         const str = try classes.getString(id);
-        std.log.info("String {}: {s}", .{ i, str.data });
+        try std.fmt.format(stdout.writer(), "String {}: {s}\n", .{ i, str.data });
     }
 
     for (classes.type_ids) |id, i| {
-        const str = try classes.getString(classes.string_ids[id.descriptor_idx]);
-        std.log.info("Type {} descriptor: {s}", .{ i, str.data });
+        const str = try classes.getTypeString(id);
+        try std.fmt.format(stdout.writer(), "Type Descriptor {}: {s}\n", .{ i, str.data });
     }
 
     for (classes.proto_ids) |id, i| {
-        const shorty_str = try classes.getString(classes.string_ids[id.shorty_idx]);
-        const return_type = try classes.getString(classes.string_ids[classes.type_ids[id.return_type_idx].descriptor_idx]);
-        std.log.info("Prototype {} shorty: {s}, return type: {s}, parameter offset: {}", .{ i, shorty_str.data, return_type.data, id.parameters_off });
+        const prototype = try classes.getPrototype(id, alloc);
+        try std.fmt.format(stdout.writer(), "Prototype {}; shorty {s}; (", .{ i, prototype.shorty.data });
+        if (prototype.parameters) |parameters| {
+            for (try classes.getTypeStringList(parameters, alloc)) |type_string| {
+                try std.fmt.format(stdout.writer(), "{s}", .{type_string.data});
+            }
+        }
+        try std.fmt.format(stdout.writer(), "){s}\n", .{prototype.return_type.data});
     }
 
     for (classes.field_ids) |id, i| {
         const class_str = try classes.getString(classes.string_ids[classes.type_ids[id.class_idx].descriptor_idx]);
         const type_str = try classes.getString(classes.string_ids[classes.type_ids[id.type_idx].descriptor_idx]);
         const name_str = try classes.getString(classes.string_ids[id.name_idx]);
-        std.log.info("Field {}, {s}.{s}: {s},", .{ i, class_str.data, name_str.data, type_str.data });
+        try std.fmt.format(stdout.writer(), "Field {}, {s}.{s}: {s}", .{ i, class_str.data, name_str.data, type_str.data });
     }
 
     for (classes.method_ids) |id, i| {
         const class_str = try classes.getString(classes.string_ids[classes.type_ids[id.class_idx].descriptor_idx]);
         const name_str = try classes.getString(classes.string_ids[id.name_idx]);
-        std.log.info("Method {}, {s}.{s}, proto {}", .{ i, class_str.data, name_str.data, id.proto_idx });
+        const prototype = try classes.getPrototype(classes.proto_ids[id.proto_idx], alloc);
+        try std.fmt.format(stdout.writer(), "Method {}, {s}.{s}(", .{ i, class_str.data, name_str.data });
+        if (prototype.parameters) |parameters| {
+            for (try classes.getTypeStringList(parameters, alloc)) |type_string| {
+                try std.fmt.format(stdout.writer(), "{s}", .{type_string.data});
+            }
+        }
+        try std.fmt.format(stdout.writer(), "){s}\n", .{prototype.return_type.data});
     }
 
     for (classes.class_defs) |def| {
