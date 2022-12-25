@@ -64,17 +64,92 @@ pub fn run(stdout: std.fs.File) !void {
     }
 }
 
-pub fn print_element_names(stdout: std.fs.File, a_node: ?*c.xmlNode, depth: usize) !void {
+pub fn print_attributes(stdout: std.fs.File, doc: c.xmlDocPtr, node: *c.xmlNode) !void {
+    var cur_attribute = node.properties;
+    _ = doc;
+    while (cur_attribute) |attribute| : (cur_attribute = attribute.*.next) {
+        const attr_name = attribute.*.name;
+        const attr_value = c.xmlGetProp(node, attr_name);
+        defer c.xmlFree.?(attr_value);
+        try std.fmt.format(stdout.writer(), " {s}={s}", .{ attr_name, attr_value });
+    }
+}
+
+pub fn print_element_names(stdout: std.fs.File, doc: c.xmlDocPtr, a_node: ?*c.xmlNode, depth: usize) !void {
     var cur_node = a_node;
     while (cur_node) |node| : (cur_node = node.next) {
-        if (node.type == c.XML_ELEMENT_NODE) {
-            var i: usize = 0;
-            while (i < depth) : (i += 1) {
-                _ = try stdout.writer().write("\t");
-            }
-            try std.fmt.format(stdout.writer(), "node type: Element, name: {s}\n", .{node.name});
+        var i: usize = 0;
+        while (i < depth) : (i += 1) {
+            _ = try stdout.writer().write("\t");
         }
-        try print_element_names(stdout, node.children, depth + 1);
+        switch (node.type) {
+            c.XML_ELEMENT_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Element, name: {s}", .{node.name});
+                try print_attributes(stdout, doc, node);
+                _ = try stdout.writer().write("\n");
+            },
+            c.XML_ATTRIBUTE_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Attribute, name: {s}\n", .{node.name});
+            },
+            c.XML_TEXT_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Text, name: {s}\n", .{node.name});
+            },
+            c.XML_CDATA_SECTION_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: CDATA, name: {s}\n", .{node.name});
+            },
+            c.XML_ENTITY_REF_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Entity Ref, name: {s}\n", .{node.name});
+            },
+            c.XML_ENTITY_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Entity, name: {s}\n", .{node.name});
+            },
+            c.XML_PI_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: PI, name: {s}\n", .{node.name});
+            },
+            c.XML_COMMENT_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Comment, name: {s}\n", .{node.name});
+            },
+            c.XML_DOCUMENT_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Document, name: {s}\n", .{node.name});
+            },
+            c.XML_DOCUMENT_TYPE_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Document Type, name: {s}\n", .{node.name});
+            },
+            c.XML_DOCUMENT_FRAG_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Document Frag, name: {s}\n", .{node.name});
+            },
+            c.XML_NOTATION_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Notation, name: {s}\n", .{node.name});
+            },
+            c.XML_HTML_DOCUMENT_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: Html Document, name: {s}\n", .{node.name});
+            },
+            c.XML_DTD_NODE => {
+                try std.fmt.format(stdout.writer(), "node type: DTD, name: {s}\n", .{node.name});
+            },
+            c.XML_ELEMENT_DECL => {
+                try std.fmt.format(stdout.writer(), "node type: Element Decl, name: {s}\n", .{node.name});
+            },
+            c.XML_ATTRIBUTE_DECL => {
+                try std.fmt.format(stdout.writer(), "node type: Attribute Decl, name: {s}\n", .{node.name});
+            },
+            c.XML_ENTITY_DECL => {
+                try std.fmt.format(stdout.writer(), "node type: Entity Decl, name: {s}\n", .{node.name});
+            },
+            c.XML_NAMESPACE_DECL => {
+                try std.fmt.format(stdout.writer(), "node type: Namespace Decl, name: {s}\n", .{node.name});
+            },
+            c.XML_XINCLUDE_START => {
+                try std.fmt.format(stdout.writer(), "node type: XInclude Start, name: {s}\n", .{node.name});
+            },
+            c.XML_XINCLUDE_END => {
+                try std.fmt.format(stdout.writer(), "node type: XInclude End, name: {s}\n", .{node.name});
+            },
+            else => {
+                try std.fmt.format(stdout.writer(), "Unknown node type, name: {s}\n", .{node.name});
+            },
+        }
+        try print_element_names(stdout, doc, node.children, depth + 1);
     }
 }
 
@@ -97,7 +172,7 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     }
 
     var root_element = c.xmlDocGetRootElement(xml_doc);
-    try print_element_names(stdout, root_element, 0);
+    try print_element_names(stdout, xml_doc, root_element, 0);
 }
 
 pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
