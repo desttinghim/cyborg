@@ -78,21 +78,23 @@ pub fn print_attributes(stdout: std.fs.File, doc: c.xmlDocPtr, node: *c.xmlNode)
 pub fn print_element_names(stdout: std.fs.File, doc: c.xmlDocPtr, a_node: ?*c.xmlNode, depth: usize) !void {
     var cur_node = a_node;
     while (cur_node) |node| : (cur_node = node.next) {
-        var i: usize = 0;
-        while (i < depth) : (i += 1) {
-            _ = try stdout.writer().write("\t");
+        {
+            var i: usize = 0;
+            while (i < depth) : (i += 1) {
+                _ = try stdout.writer().write("  ");
+            }
         }
         switch (node.type) {
             c.XML_ELEMENT_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Element, name: {s}", .{node.name});
+                try std.fmt.format(stdout.writer(), "<{s}", .{node.name});
                 try print_attributes(stdout, doc, node);
-                _ = try stdout.writer().write("\n");
+                _ = try stdout.writer().write(">\n");
             },
             c.XML_ATTRIBUTE_NODE => {
                 try std.fmt.format(stdout.writer(), "node type: Attribute, name: {s}\n", .{node.name});
             },
             c.XML_TEXT_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Text, name: {s}\n", .{node.name});
+                // try std.fmt.format(stdout.writer(), "node type: Text, name: {s}\n", .{node.name});
             },
             c.XML_CDATA_SECTION_NODE => {
                 try std.fmt.format(stdout.writer(), "node type: CDATA, name: {s}\n", .{node.name});
@@ -154,13 +156,7 @@ pub fn print_element_names(stdout: std.fs.File, doc: c.xmlDocPtr, a_node: ?*c.xm
 }
 
 pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
-    // const filepath = try std.fs.realpathAlloc(alloc, args[2]);
-    // const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
-    // const dir = try std.fs.openDirAbsolute(dirpath, .{});
-    // const file = try dir.openFile(filepath, .{});
     _ = alloc;
-
-    // c.LIBXML_TEST_VERSION;
 
     var xml_doc = c.xmlReadFile(args[2].ptr, null, 0);
     defer {

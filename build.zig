@@ -2,43 +2,43 @@ const std = @import("std");
 const libxml2 = @import("dep/zig-libxml2/libxml2.zig");
 
 pub fn build(b: *std.build.Builder) !void {
-    // Standard target options allows the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
     const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
 
-    const zig_archive = std.build.Pkg{
-        .name = "archive",
-        .source = .{ .path = "dep/zig-archive/src/main.zig" },
-    };
+    const zig_archive = b.dependency("zig_archive", .{});
 
-    // Standard release options allow the person running `zig build` to select
-    // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall.
-    const mode = b.standardReleaseOptions();
-
-    const xml = try libxml2.create(b, target, mode, .{
+    const xml = try libxml2.create(b, target, optimize, .{
         .iconv = false,
         .lzma = false,
         .zlib = false,
     });
 
-    const lib = b.addStaticLibrary("zandroid", "src/main.zig");
-    lib.addPackage(zig_archive);
-    lib.setBuildMode(mode);
+    const lib = b.addStaticLibrary(.{
+        .name = "zandroid",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    lib.addModule("archive", zig_archive.module("archive"));
     xml.link(lib);
     lib.install();
 
-    const main_tests = b.addTest("src/main.zig");
-    main_tests.setBuildMode(mode);
+    const main_tests = b.addTest(.{
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
 
     const test_step = b.step("test", "Run library tests");
     test_step.dependOn(&main_tests.step);
 
-    const exe = b.addExecutable("zandroid", "src/main.zig");
-    exe.addPackage(zig_archive);
-    exe.setBuildMode(mode);
-    exe.setTarget(target);
+    const exe = b.addExecutable(.{
+        .name = "zandroid",
+        .root_source_file = .{ .path = "src/main.zig" },
+        .target = target,
+        .optimize = optimize,
+    });
+    exe.addModule("archive", zig_archive.module("archive"));
     xml.link(exe);
     exe.install();
 

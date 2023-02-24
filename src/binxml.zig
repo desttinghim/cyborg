@@ -465,6 +465,7 @@ const XMLTree = struct {
                     }
                 },
                 .XmlResourceMap => {
+                    std.log.info("skipped resource map", .{});
                     // Skip for now
                     // TODO
                 },
