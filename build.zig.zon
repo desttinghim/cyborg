@@ -7,8 +7,8 @@
             .hash = "122045a8ae4353dc68bcce680113b4a504070ba79169da93098ab032b0061fd620cd",
         },
         .zig_archive = .{
-            .url = "https://github.com/desttinghim/zig-archive/archive/fa5e95490ec4afc5da01feaf9a113641ff9ece0f.tar.gz",
-            .hash = "12208e80a53b866258b376644d1f228cc0a319e3fc3e43e937d2c0aa98021931ac20",
+            .url = "https://github.com/desttinghim/zig-archive/archive/d65c7c7625741f33f3e63a7b14cb1a4e7beeca15.tar.gz",
+            .hash = "1220c8daf0ffd7b3dca16896b06c8ebb1977e154aa2ffe9cb9fbbd3c9d82ec98be48",
         },
     },
 }

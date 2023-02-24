@@ -523,7 +523,7 @@ pub const Dex = struct {
 
     pub fn getTypeStringList(dex: Dex, type_list: TypeList, allocator: std.mem.Allocator) ![]StringDataItem {
         var string_list = try allocator.alloc(StringDataItem, type_list.size);
-        for (type_list.list) |type_item, i| {
+        for (type_list.list, 0..) |type_item, i| {
             string_list[i] = try dex.getTypeString(dex.type_ids[type_item.type_idx]);
         }
         return string_list;

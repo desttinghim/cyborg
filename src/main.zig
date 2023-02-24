@@ -181,7 +181,7 @@ pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 
     try archive_reader.load();
 
-    for (archive_reader.directory.items) |cd_record, i| {
+    for (archive_reader.directory.items, 0..) |cd_record, i| {
         _ = cd_record;
         const header = archive_reader.getHeader(i);
         _ = try stdout.write(header.filename);
@@ -249,17 +249,17 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         try std.fmt.format(stdout.writer(), "{}\n", .{list_item});
     }
 
-    for (classes.string_ids) |id, i| {
+    for (classes.string_ids, 0..) |id, i| {
         const str = try classes.getString(id);
         try std.fmt.format(stdout.writer(), "String {}: {s}\n", .{ i, str.data });
     }
 
-    for (classes.type_ids) |id, i| {
+    for (classes.type_ids, 0..) |id, i| {
         const str = try classes.getTypeString(id);
         try std.fmt.format(stdout.writer(), "Type Descriptor {}: {s}\n", .{ i, str.data });
     }
 
-    for (classes.proto_ids) |id, i| {
+    for (classes.proto_ids, 0..) |id, i| {
         const prototype = try classes.getPrototype(id, alloc);
         try std.fmt.format(stdout.writer(), "Prototype {}; shorty {s}; (", .{ i, prototype.shorty.data });
         if (prototype.parameters) |parameters| {
@@ -270,14 +270,14 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         try std.fmt.format(stdout.writer(), "){s}\n", .{prototype.return_type.data});
     }
 
-    for (classes.field_ids) |id, i| {
+    for (classes.field_ids, 0..) |id, i| {
         const class_str = try classes.getString(classes.string_ids[classes.type_ids[id.class_idx].descriptor_idx]);
         const type_str = try classes.getString(classes.string_ids[classes.type_ids[id.type_idx].descriptor_idx]);
         const name_str = try classes.getString(classes.string_ids[id.name_idx]);
         try std.fmt.format(stdout.writer(), "Field {}, {s}.{s}: {s}", .{ i, class_str.data, name_str.data, type_str.data });
     }
 
-    for (classes.method_ids) |id, i| {
+    for (classes.method_ids, 0..) |id, i| {
         const class_str = try classes.getString(classes.string_ids[classes.type_ids[id.class_idx].descriptor_idx]);
         const name_str = try classes.getString(classes.string_ids[id.name_idx]);
         const prototype = try classes.getPrototype(classes.proto_ids[id.proto_idx], alloc);
@@ -302,7 +302,7 @@ fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
     var indent: usize = 0;
 
     for (document.xml_trees) |xml_tree| {
-        for (xml_tree.nodes) |node, node_id| {
+        for (xml_tree.nodes.items, 0..) |node, node_id| {
             if (node.extended == .Attribute) {
                 indent += 1;
             }
@@ -343,7 +343,7 @@ fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
                             try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
                         }
                     }
-                    for (xml_tree.attributes) |*attr| {
+                    for (xml_tree.attributes.items) |*attr| {
                         if (attr.*.node != node_id) continue;
                         try std.fmt.format(stdout, "\n", .{});
                         var iloop2: usize = 1;

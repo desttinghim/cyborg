@@ -1,6 +1,3 @@
-const std = @import("std");
-const manifest = @import("manifest.zig");
-
 const Type = enum(u16) {
     Null = 0x0000,
     StringPool = 0x0001,
@@ -230,12 +227,12 @@ const StringPool = struct {
 
     const Data = union {
         Utf8: struct {
-            pool: []u8,
-            slices: [][]u8,
+            pool: ArrayList(u8),
+            slices: ArrayList([]u8),
         },
         Utf16: struct {
-            pool: []u16,
-            slices: [][]u16,
+            pool: ArrayList(u16),
+            slices: ArrayList([]u16),
         },
     };
 
@@ -304,12 +301,12 @@ const StringPool = struct {
 
     pub fn getUtf16Raw(self: StringPool, index: u32) ?[]const u16 {
         if (self.header.flags.utf8 or index == std.math.maxInt(u32)) return null;
-        return self.data.Utf16.slices[index];
+        return self.data.Utf16.slices.items[index];
     }
 
     pub fn getUtf8Raw(self: StringPool, index: u32) ?[]const u8 {
         if (!self.header.flags.utf8 or index == std.math.maxInt(u32)) return null;
-        return self.data.Utf8.slices[index];
+        return self.data.Utf8.slices.items[index];
     }
 
     pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !StringPool {
@@ -318,7 +315,7 @@ const StringPool = struct {
         const data: Data = data: {
             if (header.flags.utf8) {
                 const buf_size = (header.header.size - header.header.header_size);
-                const string_buf = try alloc.alloc(u8, buf_size);
+                var string_buf = try ArrayList(u8).initCapacity(alloc, buf_size);
 
                 const string_offset = try alloc.alloc(usize, header.string_count);
                 defer alloc.free(string_offset);
@@ -330,25 +327,27 @@ const StringPool = struct {
                 }
 
                 // Copy UTF8 buffer into memory
-                for (string_buf) |*char| {
-                    char.* = try reader.readInt(u8, .Little);
+                for (0..string_buf.capacity) |_| {
+                    string_buf.appendAssumeCapacity(try reader.readInt(u8, .Little));
                 }
 
                 // Construct slices
-                const string_pool = try alloc.alloc([]u8, header.string_count);
-                for (string_offset) |offset, i| {
+                var string_pool = try ArrayList([]u8).initCapacity(alloc, header.string_count);
+                for (string_offset) |offset| {
                     var buf_index = offset;
-                    var len: usize = string_buf[buf_index];
+                    var len: usize = string_buf.items[buf_index];
                     var add_index: usize = 1;
-                    string_pool[i] = string_buf[buf_index + add_index .. buf_index + add_index + len];
+                    string_pool.appendAssumeCapacity(string_buf.items[buf_index + add_index .. buf_index + add_index + len]);
                 }
-                break :data .{ .Utf8 = .{
-                    .pool = string_buf,
-                    .slices = string_pool,
-                } };
+                break :data .{
+                    .Utf8 = .{
+                        .pool = string_buf,
+                        .slices = string_pool,
+                    },
+                };
             } else {
                 const buf_size = (header.header.size - header.header.header_size) / 2;
-                const string_buf = try alloc.alloc(u16, buf_size);
+                var string_buf = try ArrayList(u16).initCapacity(alloc, buf_size);
 
                 const string_offset = try alloc.alloc(usize, header.string_count);
                 defer alloc.free(string_offset);
@@ -360,22 +359,22 @@ const StringPool = struct {
                 }
 
                 // Copy UTF16 buffer into memory
-                for (string_buf) |*char| {
-                    char.* = try reader.readInt(u16, .Little);
+                for (0..string_buf.capacity) |_| {
+                    string_buf.appendAssumeCapacity(try reader.readInt(u16, .Little));
                 }
 
                 // Construct slices
-                const string_pool = try alloc.alloc([]u16, header.string_count);
-                for (string_offset) |offset, i| {
+                var string_pool = try ArrayList([]u16).initCapacity(alloc, header.string_count);
+                for (string_offset) |offset| {
                     var buf_index = offset / 2;
-                    var len: usize = string_buf[buf_index];
+                    var len: usize = string_buf.items[buf_index];
                     var add_index: usize = 1;
                     if (len > 32767) {
                         len = (len & 0b0111_1111) << 16;
-                        len += string_buf[buf_index + add_index];
+                        len += string_buf.items[buf_index + add_index];
                         add_index += 1;
                     }
-                    string_pool[i] = string_buf[buf_index + add_index .. buf_index + add_index + len];
+                    string_pool.appendAssumeCapacity(string_buf.items[buf_index + add_index .. buf_index + add_index + len]);
                 }
                 break :data .{ .Utf16 = .{
                     .pool = string_buf,
@@ -425,8 +424,8 @@ const StringPool = struct {
 const XMLTree = struct {
     header: Header,
     string_pool: StringPool,
-    nodes: []Node,
-    attributes: []Attribute,
+    nodes: ArrayList(Node),
+    attributes: ArrayList(Attribute),
 
     pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !XMLTree {
         const header = chunk_header;
@@ -436,10 +435,8 @@ const XMLTree = struct {
         var pos: usize = try seek.getPos();
         var resource_header = try ResourceChunk.read(reader);
 
-        var nodes = std.ArrayList(Node).init(alloc);
-        defer nodes.deinit();
-        var attributes = std.ArrayList(Attribute).init(alloc);
-        defer attributes.deinit();
+        var nodes = ArrayList(Node){};
+        var attributes = ArrayList(Attribute){};
 
         while (true) {
             switch (resource_header.type) {
@@ -449,16 +446,17 @@ const XMLTree = struct {
                 .XmlStartNamespace,
                 .XmlEndElement,
                 .XmlEndNamespace,
-                => try nodes.append(try XMLTree.Node.read(reader, resource_header)),
+                => try nodes.append(alloc, try XMLTree.Node.read(reader, resource_header)),
                 .XmlStartElement => {
                     var node_id = nodes.items.len;
                     var node = try XMLTree.Node.read(reader, resource_header);
-                    try nodes.append(node);
+                    try nodes.append(alloc, node);
                     var attribute = node.extended.Attribute;
                     if (attribute.count > 0) {
                         var i: usize = 0;
                         while (i < attribute.count) : (i += 1) {
                             try attributes.append(
+                                alloc,
                                 try XMLTree.Attribute.read(reader, node_id),
                             );
                         }
@@ -485,8 +483,8 @@ const XMLTree = struct {
         return XMLTree{
             .header = header,
             .string_pool = string_pool,
-            .nodes = try nodes.toOwnedSlice(),
-            .attributes = try attributes.toOwnedSlice(),
+            .nodes = nodes,
+            .attributes = attributes,
         };
     }
 
@@ -1079,7 +1077,7 @@ pub const Document = struct {
         try document.string_pool_header.write(writer);
 
         // Write the string offsets
-        for (document.string_pool) |string, i| {
+        for (document.string_pool, 0..) |string, i| {
             // Add index to account for the length values, and then multiply by 2 to get the byte offset
             try writer.writeInt(u32, @intCast(u32, (string.len + i) * 2), .Little);
         }
@@ -1093,7 +1091,7 @@ pub const Document = struct {
         }
 
         // Write the XML resource chunks
-        for (document.resources_nodes) |node, i| {
+        for (document.resources_nodes, 0..) |node, i| {
             // Write the header (including the extended bytes)
             try node.write(writer);
             // If the node is the start of an element, write out any attributes it may have
@@ -1112,3 +1110,8 @@ pub const Document = struct {
         try writer.write(file_size);
     }
 };
+
+// Depedencies
+const std = @import("std");
+const manifest = @import("manifest.zig");
+const ArrayList = std.ArrayListUnmanaged;
