@@ -1,5 +1,4 @@
 pub usingnamespace @cImport({
+    @cDefine("LIBXML_READER_ENABLED", "1");
     @cInclude("libxml/xmlreader.h");
-    @cInclude("libxml/parser.h");
-    @cInclude("libxml/tree.h");
 });

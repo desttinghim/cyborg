@@ -17,7 +17,6 @@ const usage =
     \\  xml <file>                  Reads an Android binary XML file
     \\  apk <file>                  Reads the AndroidManifest.xml in the indicated apk
     \\  dex <file>                  Reads a Dalvik EXecutable file
-    // \\  pkg <manifest> <out>        Creates an APK from a manifest.json
     \\
 ;
 
@@ -75,100 +74,63 @@ pub fn print_attributes(stdout: std.fs.File, doc: c.xmlDocPtr, node: *c.xmlNode)
     }
 }
 
-pub fn print_element_names(stdout: std.fs.File, doc: c.xmlDocPtr, a_node: ?*c.xmlNode, depth: usize) !void {
-    var cur_node = a_node;
-    while (cur_node) |node| : (cur_node = node.next) {
-        {
-            var i: usize = 0;
-            while (i < depth) : (i += 1) {
-                _ = try stdout.writer().write("  ");
-            }
-        }
-        switch (node.type) {
-            c.XML_ELEMENT_NODE => {
-                try std.fmt.format(stdout.writer(), "<{s}", .{node.name});
-                try print_attributes(stdout, doc, node);
-                _ = try stdout.writer().write(">\n");
-            },
-            c.XML_ATTRIBUTE_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Attribute, name: {s}\n", .{node.name});
-            },
-            c.XML_TEXT_NODE => {
-                // try std.fmt.format(stdout.writer(), "node type: Text, name: {s}\n", .{node.name});
-            },
-            c.XML_CDATA_SECTION_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: CDATA, name: {s}\n", .{node.name});
-            },
-            c.XML_ENTITY_REF_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Entity Ref, name: {s}\n", .{node.name});
-            },
-            c.XML_ENTITY_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Entity, name: {s}\n", .{node.name});
-            },
-            c.XML_PI_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: PI, name: {s}\n", .{node.name});
-            },
-            c.XML_COMMENT_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Comment, name: {s}\n", .{node.name});
-            },
-            c.XML_DOCUMENT_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Document, name: {s}\n", .{node.name});
-            },
-            c.XML_DOCUMENT_TYPE_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Document Type, name: {s}\n", .{node.name});
-            },
-            c.XML_DOCUMENT_FRAG_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Document Frag, name: {s}\n", .{node.name});
-            },
-            c.XML_NOTATION_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Notation, name: {s}\n", .{node.name});
-            },
-            c.XML_HTML_DOCUMENT_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: Html Document, name: {s}\n", .{node.name});
-            },
-            c.XML_DTD_NODE => {
-                try std.fmt.format(stdout.writer(), "node type: DTD, name: {s}\n", .{node.name});
-            },
-            c.XML_ELEMENT_DECL => {
-                try std.fmt.format(stdout.writer(), "node type: Element Decl, name: {s}\n", .{node.name});
-            },
-            c.XML_ATTRIBUTE_DECL => {
-                try std.fmt.format(stdout.writer(), "node type: Attribute Decl, name: {s}\n", .{node.name});
-            },
-            c.XML_ENTITY_DECL => {
-                try std.fmt.format(stdout.writer(), "node type: Entity Decl, name: {s}\n", .{node.name});
-            },
-            c.XML_NAMESPACE_DECL => {
-                try std.fmt.format(stdout.writer(), "node type: Namespace Decl, name: {s}\n", .{node.name});
-            },
-            c.XML_XINCLUDE_START => {
-                try std.fmt.format(stdout.writer(), "node type: XInclude Start, name: {s}\n", .{node.name});
-            },
-            c.XML_XINCLUDE_END => {
-                try std.fmt.format(stdout.writer(), "node type: XInclude End, name: {s}\n", .{node.name});
-            },
-            else => {
-                try std.fmt.format(stdout.writer(), "Unknown node type, name: {s}\n", .{node.name});
-            },
-        }
-        try print_element_names(stdout, doc, node.children, depth + 1);
+const XMLReaderType = enum(c_int) {
+    None = 0,
+    Element,
+    Attribute,
+    Text,
+    CData,
+    EntityReference,
+    Entity,
+    ProcessingInstruction,
+    Comment,
+    Document,
+    DocumentType,
+    DocumentFragment,
+    Notation,
+    Whitespace,
+    SignificantWhitespace,
+    EndElement,
+    EndEntity,
+    XMLDeclaration,
+};
+
+pub fn print_node(stdout: std.fs.File, reader: c.xmlTextReaderPtr) !void {
+    var name: [*:0]const u8 = c.xmlTextReaderConstName(reader) orelse "--";
+    var t = c.xmlTextReaderNodeType(reader);
+    try stdout.writer().print("{:<5} {s: <25} {s: <20} {:<10} {:<10}", .{
+        c.xmlTextReaderDepth(reader),
+        @tagName(@intToEnum(XMLReaderType, t)),
+        name,
+        c.xmlTextReaderIsEmptyElement(reader),
+        c.xmlTextReaderHasValue(reader),
+    });
+
+    if (c.xmlTextReaderConstValue(reader)) |value| {
+        try stdout.writer().print("{s}\n", .{value});
+    } else {
+        _ = try stdout.writer().write("\n");
     }
 }
 
 pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
     _ = alloc;
 
-    var xml_doc = c.xmlReadFile(args[2].ptr, null, 0);
+    var reader = c.xmlNewTextReaderFilename(args[2].ptr);
+    if (reader == null) {
+        try std.fmt.format(stdout.writer(), "error: could not open file {s}\n", .{args[2]});
+        return error.XMLReaderInit;
+    }
     defer {
-        c.xmlFreeDoc(xml_doc);
+        c.xmlFreeTextReader(reader);
         c.xmlCleanupParser();
     }
-    if (xml_doc == null) {
-        try std.fmt.format(stdout.writer(), "error: could not parse file {s}\n", .{args[2]});
-    }
 
-    var root_element = c.xmlDocGetRootElement(xml_doc);
-    try print_element_names(stdout, xml_doc, root_element, 0);
+    var ret = c.xmlTextReaderRead(reader);
+    while (ret == 1) : (ret = c.xmlTextReaderRead(reader)) {
+        // process node
+        try print_node(stdout, reader);
+    }
 }
 
 pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
