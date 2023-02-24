@@ -301,7 +301,7 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
     var indent: usize = 0;
 
-    for (document.xml_trees) |xml_tree| {
+    for (document.xml_trees.items) |xml_tree| {
         for (xml_tree.nodes.items, 0..) |node, node_id| {
             if (node.extended == .Attribute) {
                 indent += 1;
@@ -376,8 +376,8 @@ fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
         }
     }
 
-    for (document.tables) |table| {
-        for (table.packages) |package| {
+    for (document.tables.items) |table| {
+        for (table.packages.items) |package| {
             try std.fmt.format(stdout.writer(), "Package {} (ID {})\n", .{ std.unicode.fmtUtf16le(package.name), package.id });
             try std.fmt.format(stdout.writer(), "\tType Strings {}\n\tLast Public Type {}\n\tKey Strings {}\n\tLast Public Key {}\n\tType ID Offset {}\n", .{
                 package.type_strings,
@@ -386,16 +386,16 @@ fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
                 package.last_public_key,
                 package.type_id_offset,
             });
-            for (package.type_spec) |type_spec| {
+            for (package.type_spec.items) |type_spec| {
                 try std.fmt.format(stdout.writer(), "\tType Spec {}\n", .{type_spec.id});
                 for (type_spec.entry_indices) |*entry| {
                     try std.fmt.format(stdout.writer(), "\t\t{}\n", .{entry.*});
                 }
             }
-            for (package.table_type) |table_type| {
+            for (package.table_type.items) |table_type| {
                 try std.fmt.format(stdout.writer(), "\tTable Type {}, {}\n", .{ table_type.id, table_type.flags });
                 // try std.fmt.format(stdout.writer(), "\t\tConfig: {}\n", .{table_type.config});
-                for (table_type.entries) |*entry| {
+                for (table_type.entries.items) |*entry| {
                     if (entry.*.value) |*value| {
                         value.*.string_pool = &package.key_string_pool;
                     }

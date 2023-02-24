@@ -649,15 +649,15 @@ const XMLTree = struct {
 
 const ResourceTable = struct {
     string_pool: StringPool,
-    packages: []Package,
+    packages: ArrayList(Package),
 
     pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !ResourceTable {
         const header = try Header.read(reader, chunk_header);
 
         var string_pool: StringPool = undefined;
 
-        var packages = try std.ArrayList(ResourceTable.Package).initCapacity(alloc, header.package_count);
-        errdefer packages.deinit();
+        var packages = try ArrayList(ResourceTable.Package).initCapacity(alloc, header.package_count);
+        errdefer packages.clearAndFree(alloc);
 
         var pos: usize = try seek.getPos();
         var package_header = try ResourceChunk.read(reader);
@@ -669,7 +669,7 @@ const ResourceTable = struct {
                 },
                 .TablePackage => {
                     const table_package_type = try Package.read(seek, reader, pos, package_header, alloc);
-                    try packages.append(table_package_type);
+                    packages.appendAssumeCapacity(table_package_type);
                 },
                 else => {
                     return error.InvalidChunkType;
@@ -684,7 +684,7 @@ const ResourceTable = struct {
         }
 
         return ResourceTable{
-            .packages = try packages.toOwnedSlice(),
+            .packages = packages,
             .string_pool = string_pool,
         };
     }
@@ -720,8 +720,8 @@ const ResourceTable = struct {
         // Runtime values
         type_string_pool: StringPool,
         key_string_pool: StringPool,
-        type_spec: []TypeSpec,
-        table_type: []TableType,
+        type_spec: ArrayList(TypeSpec),
+        table_type: ArrayList(TableType),
 
         fn read(seek: anytype, reader: anytype, starting_pos: usize, header: ResourceChunk, alloc: std.mem.Allocator) !Package {
             var package: Package = undefined;
@@ -742,11 +742,8 @@ const ResourceTable = struct {
             package.last_public_key = try reader.readInt(u32, .Little);
             package.type_id_offset = try reader.readInt(u32, .Little);
 
-            var type_specs = std.ArrayList(TypeSpec).init(alloc);
-            defer type_specs.deinit();
-
-            var table_types = std.ArrayList(TableType).init(alloc);
-            defer table_types.deinit();
+            var type_specs = ArrayList(TypeSpec){};
+            var table_types = ArrayList(TableType){};
 
             var type_string_pool: ?StringPool = null;
             var key_string_pool: ?StringPool = null;
@@ -768,11 +765,11 @@ const ResourceTable = struct {
                     },
                     .TableTypeSpec => {
                         const table_spec_type = try ResourceTable.TypeSpec.read(reader, package_header, alloc);
-                        try type_specs.append(table_spec_type);
+                        try type_specs.append(alloc, table_spec_type);
                     },
                     .TableType => {
                         const table_type = try ResourceTable.TableType.read(seek, reader, pos, package_header, alloc);
-                        try table_types.append(table_type);
+                        try table_types.append(alloc, table_type);
                     },
                     else => {
                         std.log.info("Found {s} while parsing package", .{@tagName(package_header.type)});
@@ -788,8 +785,8 @@ const ResourceTable = struct {
             }
             package.type_string_pool = type_string_pool orelse return error.MissingTypeStringPool;
             package.key_string_pool = key_string_pool orelse return error.MissingKeyStringPool;
-            package.type_spec = try type_specs.toOwnedSlice();
-            package.table_type = try table_types.toOwnedSlice();
+            package.type_spec = type_specs;
+            package.table_type = table_types;
 
             return package;
         }
@@ -933,8 +930,8 @@ const ResourceTable = struct {
         entry_count: u32,
         entries_start: u32,
         config: Config,
-        entry_indices: []u32,
-        entries: []Entry,
+        entry_indices: ArrayList(u32),
+        entries: ArrayList(Entry),
 
         fn read(seek: anytype, reader: anytype, pos: usize, header: ResourceChunk, alloc: std.mem.Allocator) !TableType {
             var table_type: TableType = undefined;
@@ -951,14 +948,14 @@ const ResourceTable = struct {
                 // Complex flag
             } else {
                 try seek.seekTo(pos + table_type.header.header_size);
-                table_type.entry_indices = try alloc.alloc(u32, table_type.entry_count);
-                for (table_type.entry_indices) |*entry| {
-                    entry.* = try reader.readInt(u32, .Little);
+                table_type.entry_indices = try ArrayList(u32).initCapacity(alloc, table_type.entry_count);
+                for (0..table_type.entry_indices.capacity) |_| {
+                    table_type.entry_indices.appendAssumeCapacity(try reader.readInt(u32, .Little));
                 }
                 try seek.seekTo(pos + table_type.entries_start);
-                table_type.entries = try alloc.alloc(Entry, table_type.entry_count);
-                for (table_type.entries) |*entry| {
-                    entry.* = try Entry.read(reader);
+                table_type.entries = try ArrayList(Entry).initCapacity(alloc, table_type.entry_count);
+                for (0..table_type.entries.capacity) |_| {
+                    table_type.entries.appendAssumeCapacity(try Entry.read(reader));
                 }
             }
 
@@ -1018,8 +1015,8 @@ const ResourceTable = struct {
 
 pub const Document = struct {
     arena: std.heap.ArenaAllocator,
-    xml_trees: []XMLTree,
-    tables: []ResourceTable,
+    xml_trees: ArrayList(XMLTree),
+    tables: ArrayList(ResourceTable),
 
     pub fn readAlloc(seek: anytype, reader: anytype, backing_allocator: std.mem.Allocator) !Document {
         const file_length = try seek.getEndPos();
@@ -1027,18 +1024,18 @@ pub const Document = struct {
         var arena = std.heap.ArenaAllocator.init(backing_allocator);
         const alloc = arena.allocator();
 
-        var xml_trees = std.ArrayList(XMLTree).init(backing_allocator);
-        var tables = std.ArrayList(ResourceTable).init(backing_allocator);
+        var xml_trees = ArrayList(XMLTree){};
+        var tables = ArrayList(ResourceTable){};
 
         var pos: usize = try seek.getPos();
         var header = try ResourceChunk.read(reader);
         while (true) {
             switch (header.type) {
                 .Xml => {
-                    try xml_trees.append(try XMLTree.readAlloc(seek, reader, pos, header, alloc));
+                    try xml_trees.append(alloc, try XMLTree.readAlloc(seek, reader, pos, header, alloc));
                 },
                 .Table => {
-                    try tables.append(try ResourceTable.readAlloc(seek, reader, pos, header, alloc));
+                    try tables.append(alloc, try ResourceTable.readAlloc(seek, reader, pos, header, alloc));
                 },
                 .Null => {
                     std.log.err("Encountered null chunk {}, {?}", .{ pos, header });
@@ -1059,8 +1056,8 @@ pub const Document = struct {
 
         return Document{
             .arena = arena,
-            .xml_trees = try xml_trees.toOwnedSlice(),
-            .tables = try tables.toOwnedSlice(),
+            .xml_trees = xml_trees,
+            .tables = tables,
         };
     }
 
