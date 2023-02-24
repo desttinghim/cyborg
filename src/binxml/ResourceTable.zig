@@ -3,7 +3,7 @@ const ResourceTable = @This();
 string_pool: StringPool,
 packages: ArrayList(Package),
 
-pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !ResourceTable {
+pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_header: ResourceChunk.Header, alloc: std.mem.Allocator) !ResourceTable {
     const header = try Header.read(reader, chunk_header);
 
     var string_pool: StringPool = undefined;
@@ -12,7 +12,7 @@ pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_head
     errdefer packages.clearAndFree(alloc);
 
     var pos: usize = try seek.getPos();
-    var package_header = try ResourceChunk.read(reader);
+    var package_header = try ResourceChunk.Header.read(reader);
 
     while (true) {
         switch (package_header.type) {
@@ -32,7 +32,7 @@ pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_head
         }
         try seek.seekTo(pos + package_header.size);
         pos = try seek.getPos();
-        package_header = try ResourceChunk.read(reader);
+        package_header = try ResourceChunk.Header.read(reader);
     }
 
     return ResourceTable{
@@ -42,10 +42,10 @@ pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_head
 }
 
 const Header = struct {
-    header: ResourceChunk,
+    header: ResourceChunk.Header,
     package_count: u32,
 
-    fn read(reader: anytype, header: ResourceChunk) !Header {
+    fn read(reader: anytype, header: ResourceChunk.Header) !Header {
         return Header{
             .header = header,
             .package_count = try reader.readInt(u32, .Little),
@@ -54,7 +54,7 @@ const Header = struct {
 };
 
 const Package = struct {
-    header: ResourceChunk,
+    header: ResourceChunk.Header,
     id: u32,
     /// Actual name of package
     name: []const u16,
@@ -75,7 +75,7 @@ const Package = struct {
     type_spec: ArrayList(TypeSpec),
     table_type: ArrayList(TableType),
 
-    fn read(seek: anytype, reader: anytype, starting_pos: usize, header: ResourceChunk, alloc: std.mem.Allocator) !Package {
+    fn read(seek: anytype, reader: anytype, starting_pos: usize, header: ResourceChunk.Header, alloc: std.mem.Allocator) !Package {
         var package: Package = undefined;
 
         package.header = header;
@@ -103,7 +103,7 @@ const Package = struct {
         var pos = starting_pos;
         try seek.seekTo(pos + header.header_size);
         pos = try seek.getPos();
-        var package_header = try ResourceChunk.read(reader);
+        var package_header = try ResourceChunk.Header.read(reader);
         while (true) {
             switch (package_header.type) {
                 .StringPool => {
@@ -133,7 +133,7 @@ const Package = struct {
             }
             try seek.seekTo(pos + package_header.size);
             pos = try seek.getPos();
-            package_header = try ResourceChunk.read(reader);
+            package_header = try ResourceChunk.Header.read(reader);
         }
         package.type_string_pool = type_string_pool orelse return error.MissingTypeStringPool;
         package.key_string_pool = key_string_pool orelse return error.MissingKeyStringPool;
@@ -242,7 +242,6 @@ const Config = extern struct {
 };
 
 const TypeSpec = struct {
-    header: ResourceChunk,
     id: u8,
     res0: u8,
     res1: u16,
@@ -251,10 +250,10 @@ const TypeSpec = struct {
     entry_indices: []u32,
     // entries: []TableType,
 
-    fn read(reader: anytype, header: ResourceChunk, alloc: std.mem.Allocator) !TypeSpec {
+    fn read(reader: anytype, header: ResourceChunk.Header, alloc: std.mem.Allocator) !TypeSpec {
+        _ = header;
         var type_spec: TypeSpec = undefined;
 
-        type_spec.header = header;
         type_spec.id = try reader.readInt(u8, .Little);
         type_spec.res0 = try reader.readInt(u8, .Little);
         type_spec.res1 = try reader.readInt(u16, .Little);
@@ -275,7 +274,6 @@ const TypeSpec = struct {
 };
 
 const TableType = struct {
-    header: ResourceChunk,
     id: u8,
     flags: u8,
     reserved: u16,
@@ -285,10 +283,9 @@ const TableType = struct {
     entry_indices: ArrayList(u32),
     entries: ArrayList(Entry),
 
-    fn read(seek: anytype, reader: anytype, pos: usize, header: ResourceChunk, alloc: std.mem.Allocator) !TableType {
+    fn read(seek: anytype, reader: anytype, pos: usize, header: ResourceChunk.Header, alloc: std.mem.Allocator) !TableType {
         var table_type: TableType = undefined;
 
-        table_type.header = header;
         table_type.id = try reader.readInt(u8, .Little);
         table_type.flags = try reader.readInt(u8, .Little);
         table_type.reserved = try reader.readInt(u16, .Little);
@@ -299,7 +296,7 @@ const TableType = struct {
         if (table_type.flags & 0x01 != 0) {
             // Complex flag
         } else {
-            try seek.seekTo(pos + table_type.header.header_size);
+            try seek.seekTo(pos + header.header_size);
             table_type.entry_indices = try ArrayList(u32).initCapacity(alloc, table_type.entry_count);
             for (0..table_type.entry_indices.capacity) |_| {
                 table_type.entry_indices.appendAssumeCapacity(try reader.readInt(u32, .Little));
@@ -355,7 +352,6 @@ const Map = struct {
 };
 
 const LibHeader = struct {
-    header: ResourceChunk,
     count: u32,
 };
 

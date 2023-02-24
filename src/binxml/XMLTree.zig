@@ -1,17 +1,16 @@
 const XMLTree = @This();
 
-header: Header,
 string_pool: StringPool,
 nodes: ArrayList(Node),
 attributes: ArrayList(Attribute),
 
-pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !XMLTree {
+pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_header: ResourceChunk.Header, alloc: std.mem.Allocator) !XMLTree {
     const header = chunk_header;
 
     var string_pool: StringPool = undefined;
 
     var pos: usize = try seek.getPos();
-    var resource_header = try ResourceChunk.read(reader);
+    var resource_header = try ResourceChunk.Header.read(reader);
 
     var nodes = ArrayList(Node){};
     var attributes = ArrayList(Attribute){};
@@ -55,28 +54,25 @@ pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_head
         }
         try seek.seekTo(pos + resource_header.size);
         pos = try seek.getPos();
-        resource_header = try ResourceChunk.read(reader);
+        resource_header = try ResourceChunk.Header.read(reader);
     }
 
     return XMLTree{
-        .header = header,
         .string_pool = string_pool,
         .nodes = nodes,
         .attributes = attributes,
     };
 }
 
-const Header = ResourceChunk;
-
-const XMLResourceMap = ResourceChunk;
+const XMLResourceMap = ResourceChunk.Header;
 
 const Node = struct {
-    header: ResourceChunk,
+    header: ResourceChunk.Header,
     line_number: u32,
     comment: StringPool.Ref,
     extended: NodeExtended,
 
-    fn read(reader: anytype, header: ResourceChunk) !Node {
+    fn read(reader: anytype, header: ResourceChunk.Header) !Node {
         return Node{
             .header = header,
             .line_number = try reader.readInt(u32, .Little),
@@ -221,6 +217,25 @@ const Attribute = struct {
         try attribute.name.write(writer);
         try attribute.raw_value.write(writer);
         try attribute.typed_value.write(writer);
+    }
+};
+
+const Builder = struct {
+    allocator: std.mem.Allocator,
+    xml_tree: XMLTree,
+
+    pub fn init(allocator: std.mem.Allocator) void {
+        return .{
+            .allocator = allocator,
+            .xml_tree = .{
+                .header = ResourceChunk.Header.init(.Xml),
+                .string_pool = StringPool.init(),
+            },
+        };
+    }
+
+    pub fn createXMLTree(self: *Builder) !XMLTree.Builder {
+        self.document.xml_trees.append(self.allocator, .{});
     }
 };
 

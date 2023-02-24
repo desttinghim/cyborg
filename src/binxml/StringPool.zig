@@ -2,10 +2,9 @@
 
 const StringPool = @This();
 
-header: Header,
 data: Data,
 
-const Data = union {
+const Data = union(enum) {
     Utf8: struct {
         pool: ArrayList(u8),
         slices: ArrayList([]u8),
@@ -32,7 +31,7 @@ pub fn ref(index: usize) Ref {
 }
 
 const Header = struct {
-    header: ResourceChunk,
+    header: ResourceChunk.Header,
     string_count: u32,
     style_count: ?u32,
     flags: Flags,
@@ -46,7 +45,7 @@ const Header = struct {
         _unused2: u23 = 0,
     };
 
-    fn read(reader: anytype, chunk_header: ResourceChunk) !Header {
+    fn read(reader: anytype, chunk_header: ResourceChunk.Header) !Header {
         return Header{
             .header = chunk_header,
             .string_count = try reader.readInt(u32, .Little),
@@ -58,7 +57,7 @@ const Header = struct {
     }
 
     pub fn write(header: Header, writer: anytype) !void {
-        try ResourceChunk.write(writer);
+        try ResourceChunk.Header.write(writer);
         try writer.writeInt(u32, header.string_count, .Little);
         try writer.writeInt(u32, header.style_count, .Little);
         try writer.writeInt(u32, @bitCast(u32, header.flags), .Little);
@@ -67,29 +66,31 @@ const Header = struct {
     }
 };
 
+pub fn get_len(self: StringPool) usize {
+    return switch (self.data) {
+        inline else => |t| t.slices.items.len,
+    };
+}
+
 pub fn getUtf16(self: StringPool, refe: Ref) ?[]const u16 {
-    // if (self.header.flags.utf8 or refe.index == std.math.maxInt(u32)) return null;
-    // return self.data.Utf16.slices[refe.index];
     return self.getUtf16Raw(refe.index);
 }
 
 pub fn getUtf8(self: StringPool, refe: Ref) ?[]const u8 {
-    // if (!self.header.flags.utf8 or refe.index == std.math.maxInt(u32)) return null;
-    // return self.data.Utf8.slices[refe.index];
     return self.getUtf8Raw(refe.index);
 }
 
 pub fn getUtf16Raw(self: StringPool, index: u32) ?[]const u16 {
-    if (self.header.flags.utf8 or index == std.math.maxInt(u32)) return null;
+    if (self.data != .Utf16 or index == std.math.maxInt(u32)) return null;
     return self.data.Utf16.slices.items[index];
 }
 
 pub fn getUtf8Raw(self: StringPool, index: u32) ?[]const u8 {
-    if (!self.header.flags.utf8 or index == std.math.maxInt(u32)) return null;
+    if (self.data != .Utf8 or index == std.math.maxInt(u32)) return null;
     return self.data.Utf8.slices.items[index];
 }
 
-pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: ResourceChunk, alloc: std.mem.Allocator) !StringPool {
+pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: ResourceChunk.Header, alloc: std.mem.Allocator) !StringPool {
     const header = try Header.read(reader, chunk_header);
 
     const data: Data = data: {
@@ -164,7 +165,6 @@ pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: Resou
     };
 
     return StringPool{
-        .header = header,
         .data = data,
     };
 }

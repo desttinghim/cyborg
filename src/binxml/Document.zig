@@ -1,45 +1,24 @@
 const Document = @This();
 
-xml_trees: ArrayList(XMLTree),
-tables: ArrayList(ResourceTable),
+chunks: ArrayList(ResourceChunk.Chunk) = .{},
 
 pub fn readAlloc(seek: anytype, reader: anytype, alloc: std.mem.Allocator) !Document {
     const file_length = try seek.getEndPos();
 
-    var xml_trees = ArrayList(XMLTree){};
-    var tables = ArrayList(ResourceTable){};
+    var document = Document{};
 
     var pos: usize = try seek.getPos();
-    var header = try ResourceChunk.read(reader);
     while (true) {
-        switch (header.type) {
-            .Xml => {
-                try xml_trees.append(alloc, try XMLTree.readAlloc(seek, reader, pos, header, alloc));
-            },
-            .Table => {
-                try tables.append(alloc, try ResourceTable.readAlloc(seek, reader, pos, header, alloc));
-            },
-            .Null => {
-                std.log.err("Encountered null chunk {}, {?}", .{ pos, header });
-                if (header.header_size == 0) return error.MalformedNullChunk;
-            },
-            else => {
-                std.log.err("Unimplemented chunk type: {s}", .{@tagName(header.type)});
-                break;
-            },
-        }
-        if (pos + header.size >= file_length) {
-            break;
-        }
-        try seek.seekTo(pos + header.size);
-        pos = try seek.getPos();
-        header = try ResourceChunk.read(reader);
+        const chunk = ResourceChunk.readAlloc(seek, reader, pos, alloc) catch |e| switch (e) {
+            error.EndOfStream => break,
+            else => return e,
+        };
+        try document.chunks.append(alloc, chunk);
+        pos = seek.getPos() catch break;
+        if (pos > file_length) break;
     }
 
-    return Document{
-        .xml_trees = xml_trees,
-        .tables = tables,
-    };
+    return document;
 }
 
 pub fn write(document: Document, seek: anytype, writer: anytype) !Document {
@@ -86,6 +65,27 @@ pub fn write(document: Document, seek: anytype, writer: anytype) !Document {
     const file_size = seek.getEndPos();
     try seek.seekTo(4);
     try writer.write(file_size);
+}
+
+const Builder = struct {
+    allocator: std.mem.Allocator,
+    document: Document,
+
+    pub fn init(allocator: std.mem.Allocator) void {
+        return .{
+            .allocator = allocator,
+            .document = Document{},
+        };
+    }
+
+    pub fn createXMLTree(self: *Builder) !XMLTree.Builder {
+        self.document.xml_trees.append(self.allocator, .{});
+    }
+};
+
+test Builder {
+    var builder = Builder.init(std.testing.allocator);
+    _ = builder;
 }
 
 const std = @import("std");
