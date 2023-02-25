@@ -21,18 +21,22 @@ pub const Builder = struct {
         id: ?[]const u8 = null,
         class: ?[]const u8 = null,
         style: ?[]const u8 = null,
+        line_number: ?u32 = null,
+        namespace: ?[*:0]const u8,
     };
 
-    pub fn startElement(self: *Builder, namespace: [*:0]const u8, name: [*:0]const u8, attributes: []const Attribute_b, opt: ElementOptions) !void {
-        _ = opt;
+    pub fn startElement(self: *Builder, name: [*:0]const u8, attributes: []const Attribute_b, opt: ElementOptions) !void {
         const comment_ref = try self.xml_tree.string_pool.insert(self.allocator, "comment");
-        const namespace_ref = try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(namespace));
+        const namespace_ref = if (opt.namespace) |namespace|
+            try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(namespace))
+        else
+            self.xml_tree.string_pool.get_null_ref();
         const name_ref = try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(name));
         for (attributes) |_| {
             // TODO:
         }
         try self.xml_tree.nodes.append(self.allocator, .{
-            .line_number = 0,
+            .line_number = opt.line_number orelse 0,
             .comment = comment_ref,
             .extended = .{ .Attribute = .{
                 .name = name_ref,
@@ -46,10 +50,21 @@ pub const Builder = struct {
             } },
         });
     }
-    pub fn endElement(self: *Builder, namespace: [*:0]const u8, name: [*:0]const u8) !void {
-        _ = name;
-        _ = namespace;
-        _ = self;
+    pub fn endElement(self: *Builder, name: [*:0]const u8, opt: ElementOptions) !void {
+        const comment_ref = try self.xml_tree.string_pool.insert(self.allocator, "comment");
+        const namespace_ref = if (opt.namespace) |namespace|
+            try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(namespace))
+        else
+            self.xml_tree.string_pool.get_null_ref();
+        const name_ref = try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(name));
+        try self.xml_tree.nodes.append(self.allocator, .{
+            .line_number = 0,
+            .comment = comment_ref,
+            .extended = .{ .EndElement = .{
+                .name = name_ref,
+                .namespace = namespace_ref,
+            } },
+        });
     }
 
     pub fn startNamespace(self: *Builder) !void {

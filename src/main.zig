@@ -127,15 +127,25 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     var builder = binxml.XMLTree.Builder.init(alloc);
 
     var ret = c.xmlTextReaderRead(reader);
-    var namespace = "";
     while (ret == 1) : (ret = c.xmlTextReaderRead(reader)) {
-        // process node
         try print_node(stdout, reader);
         var node_type = @intToEnum(XMLReaderType, c.xmlTextReaderNodeType(reader));
-        var name = c.xmlTextReaderConstName(reader).?;
+        const name = c.xmlTextReaderConstName(reader).?;
+        const line_number = c.xmlTextReaderGetParserLineNumber(reader);
         switch (node_type) {
-            .Element => try builder.startElement(namespace, name, &.{}, .{}),
-            // .EndElement => builder.endElement(.{}),
+            .Element => {
+                try builder.startElement(
+                    name,
+                    &.{},
+                    .{
+                        .namespace = c.xmlTextReaderConstNamespaceUri(reader),
+                        .line_number = @intCast(u32, line_number),
+                    },
+                );
+            },
+            .EndElement => try builder.endElement(name, .{
+                .namespace = c.xmlTextReaderConstNamespaceUri(reader),
+            }),
             // .CData => builder.insertCData(.{}),
             else => {},
         }

@@ -30,7 +30,8 @@ pub fn ref(index: usize) Ref {
     return .{ .index = @intCast(u32, index) };
 }
 
-pub fn get_null_ref() Ref {
+pub fn get_null_ref(self: StringPool) Ref {
+    _ = self;
     return .{ .index = std.math.maxInt(u32) };
 }
 
