@@ -135,19 +135,19 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         // try print_node(stdout, reader);
         var node_type = @intToEnum(XMLReaderType, c.xmlTextReaderNodeType(reader));
         const line_number = @intCast(u32, c.xmlTextReaderGetParserLineNumber(reader));
+        try attributes.resize(0); // clear list
         switch (node_type) {
             .Element => {
-                const name = std.mem.span(c.xmlTextReaderConstName(reader) orelse return error.MissingNameForElement);
+                const name = std.mem.span(c.xmlTextReaderConstLocalName(reader) orelse return error.MissingNameForElement);
                 const namespace = if (c.xmlTextReaderConstNamespaceUri(reader)) |namespace| std.mem.span(namespace) else null;
                 const is_empty = c.xmlTextReaderIsEmptyElement(reader) == 1;
 
                 if (c.xmlTextReaderHasAttributes(reader) == 1) {
                     const count = @intCast(usize, c.xmlTextReaderAttributeCount(reader));
-                    try attributes.resize(0); // clear list
                     for (0..count) |i| {
                         if (c.xmlTextReaderMoveToAttributeNo(reader, @intCast(c_int, i)) != 1) continue;
                         const attr_ns = if (c.xmlTextReaderConstNamespaceUri(reader)) |ns| std.mem.span(ns) else null;
-                        const attr_name = std.mem.span(c.xmlTextReaderConstName(reader) orelse return error.MissingAttributeName);
+                        const attr_name = std.mem.span(c.xmlTextReaderConstLocalName(reader) orelse return error.MissingAttributeName);
                         const value = std.mem.span(c.xmlTextReaderConstValue(reader) orelse return error.MissingAttributeValue);
                         if (c.xmlTextReaderIsNamespaceDecl(reader) == 1) {
                             try builder.startNamespace(attr_name, value);
@@ -174,7 +174,7 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
                 }
             },
             .EndElement => {
-                const name = std.mem.span(c.xmlTextReaderConstName(reader) orelse return error.MissingNameForEndElement);
+                const name = std.mem.span(c.xmlTextReaderConstLocalName(reader) orelse return error.MissingNameForEndElement);
                 const namespace = if (c.xmlTextReaderConstNamespaceUri(reader)) |namespace| std.mem.span(namespace) else null;
                 try builder.endElement(name, .{
                     .namespace = namespace,
