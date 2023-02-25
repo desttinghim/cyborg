@@ -1,5 +1,69 @@
 const XMLTree = @This();
 
+pub const Builder = struct {
+    allocator: std.mem.Allocator,
+    xml_tree: XMLTree,
+
+    pub fn init(allocator: std.mem.Allocator) Builder {
+        return .{
+            .allocator = allocator,
+            .xml_tree = .{
+                .string_pool = StringPool{ .data = .{ .Utf8 = .{ .pool = .{}, .slices = .{} } } },
+                .nodes = .{},
+                .attributes = .{},
+            },
+        };
+    }
+
+    const Attribute_b = struct {};
+
+    const ElementOptions = struct {
+        id: ?[]const u8 = null,
+        class: ?[]const u8 = null,
+        style: ?[]const u8 = null,
+    };
+
+    pub fn startElement(self: *Builder, namespace: [*:0]const u8, name: [*:0]const u8, attributes: []const Attribute_b, opt: ElementOptions) !void {
+        _ = opt;
+        const comment_ref = try self.xml_tree.string_pool.insert(self.allocator, "comment");
+        const namespace_ref = try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(namespace));
+        const name_ref = try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(name));
+        for (attributes) |_| {
+            // TODO:
+        }
+        try self.xml_tree.nodes.append(self.allocator, .{
+            .line_number = 0,
+            .comment = comment_ref,
+            .extended = .{ .Attribute = .{
+                .name = name_ref,
+                .namespace = namespace_ref,
+                .start = 0,
+                .size = 0,
+                .count = 0,
+                .id_index = 0,
+                .class_index = 0,
+                .style_index = 0,
+            } },
+        });
+    }
+    pub fn endElement(self: *Builder, namespace: [*:0]const u8, name: [*:0]const u8) !void {
+        _ = name;
+        _ = namespace;
+        _ = self;
+    }
+
+    pub fn startNamespace(self: *Builder) !void {
+        _ = self;
+    }
+    pub fn endNamespace(self: *Builder) !void {
+        _ = self;
+    }
+
+    pub fn insertCData(self: *Builder) !void {
+        _ = self;
+    }
+};
+
 string_pool: StringPool,
 nodes: ArrayList(Node),
 attributes: ArrayList(Attribute),
@@ -67,14 +131,12 @@ pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_head
 const XMLResourceMap = ResourceChunk.Header;
 
 const Node = struct {
-    header: ResourceChunk.Header,
     line_number: u32,
     comment: StringPool.Ref,
     extended: NodeExtended,
 
     fn read(reader: anytype, header: ResourceChunk.Header) !Node {
         return Node{
-            .header = header,
             .line_number = try reader.readInt(u32, .Little),
             .comment = try StringPool.Ref.read(reader),
             .extended = switch (header.type) {
@@ -93,7 +155,8 @@ const Node = struct {
     }
 
     pub fn write(node: Node, writer: anytype) !void {
-        try node.header.write(writer);
+        // try node.header.write(writer);
+        // TODO: construct + write header
         try writer.writeInt(u32, node.line_number, .Little);
         try node.comment.write();
         try switch (node.extended) {
@@ -217,25 +280,6 @@ const Attribute = struct {
         try attribute.name.write(writer);
         try attribute.raw_value.write(writer);
         try attribute.typed_value.write(writer);
-    }
-};
-
-const Builder = struct {
-    allocator: std.mem.Allocator,
-    xml_tree: XMLTree,
-
-    pub fn init(allocator: std.mem.Allocator) void {
-        return .{
-            .allocator = allocator,
-            .xml_tree = .{
-                .header = ResourceChunk.Header.init(.Xml),
-                .string_pool = StringPool.init(),
-            },
-        };
-    }
-
-    pub fn createXMLTree(self: *Builder) !XMLTree.Builder {
-        self.document.xml_trees.append(self.allocator, .{});
     }
 };
 

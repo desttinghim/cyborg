@@ -75,10 +75,10 @@ pub fn print_attributes(stdout: std.fs.File, doc: c.xmlDocPtr, node: *c.xmlNode)
 }
 
 const XMLReaderType = enum(c_int) {
-    None = 0,
-    Element,
-    Attribute,
-    Text,
+    None = c.XML_READER_TYPE_NONE,
+    Element = c.XML_READER_TYPE_ELEMENT,
+    Attribute = c.XML_READER_TYPE_ATTRIBUTE,
+    Text = c.XML_READER_TYPE_TEXT,
     CData,
     EntityReference,
     Entity,
@@ -89,8 +89,8 @@ const XMLReaderType = enum(c_int) {
     DocumentFragment,
     Notation,
     Whitespace,
-    SignificantWhitespace,
-    EndElement,
+    SignificantWhitespace = c.XML_READER_TYPE_SIGNIFICANT_WHITESPACE,
+    EndElement = c.XML_READER_TYPE_END_ELEMENT,
     EndEntity,
     XMLDeclaration,
 };
@@ -114,8 +114,6 @@ pub fn print_node(stdout: std.fs.File, reader: c.xmlTextReaderPtr) !void {
 }
 
 pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
-    _ = alloc;
-
     var reader = c.xmlNewTextReaderFilename(args[2].ptr);
     if (reader == null) {
         try std.fmt.format(stdout.writer(), "error: could not open file {s}\n", .{args[2]});
@@ -126,10 +124,25 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         c.xmlCleanupParser();
     }
 
+    var builder = binxml.XMLTree.Builder.init(alloc);
+
     var ret = c.xmlTextReaderRead(reader);
+    var namespace = "";
     while (ret == 1) : (ret = c.xmlTextReaderRead(reader)) {
         // process node
         try print_node(stdout, reader);
+        var node_type = @intToEnum(XMLReaderType, c.xmlTextReaderNodeType(reader));
+        var name = c.xmlTextReaderConstName(reader).?;
+        switch (node_type) {
+            .Element => try builder.startElement(namespace, name, &.{}, .{}),
+            // .EndElement => builder.endElement(.{}),
+            // .CData => builder.insertCData(.{}),
+            else => {},
+        }
+    }
+
+    for (builder.xml_tree.nodes.items) |node| {
+        try stdout.writer().print("{s}\n", .{@tagName(node.extended)});
     }
 }
 
@@ -283,15 +296,13 @@ fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
                             });
                         },
                         .Namespace => |namespace| {
-                            if (node.header.type == .XmlStartNamespace) {
-                                const prefix = xml_tree.string_pool.getUtf16(namespace.prefix) orelse &[_]u16{};
-                                const uri = xml_tree.string_pool.getUtf16(namespace.uri) orelse &[_]u16{};
+                            const prefix = xml_tree.string_pool.getUtf16(namespace.prefix) orelse &[_]u16{};
+                            const uri = xml_tree.string_pool.getUtf16(namespace.uri) orelse &[_]u16{};
 
-                                try std.fmt.format(stdout.writer(), "xmlns:{}={}", .{
-                                    std.unicode.fmtUtf16le(prefix),
-                                    std.unicode.fmtUtf16le(uri),
-                                });
-                            }
+                            try std.fmt.format(stdout.writer(), "xmlns:{}={}", .{
+                                std.unicode.fmtUtf16le(prefix),
+                                std.unicode.fmtUtf16le(uri),
+                            });
                         },
                         .EndElement => |end| {
                             const name = xml_tree.string_pool.getUtf16(end.name) orelse &[_]u16{};
