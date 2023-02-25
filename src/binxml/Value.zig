@@ -3,22 +3,87 @@
 const Value = @This();
 
 const DataType = enum(u8) {
+    /// Data is Undefined or Empty, encoded as 0 or 1 respectively
     Null = 0x00,
+    /// Data is a reference to another resource table entry
     Reference = 0x01,
+    /// Data is an attribute resource identifier
     Attribute = 0x02,
+    /// Data is an index into containing resource's global string pool
     String = 0x03,
+    /// Data is a single-precision floating point number (f32)
     Float = 0x04,
+    /// Data encodes a dimension
     Dimension = 0x05,
+    /// Data encodes a fraction
     Fraction = 0x06,
+    /// Data is a dynamic resource table reference - must be resolved before using like a Reference
     DynReference = 0x07,
+    /// Data is a attribute resource identifier which needs to be resolved before use
     DynAttribute = 0x08,
+    /// Data is a raw integer value in decimal form
     IntDec = 0x10,
+    /// Data is a raw integer value in hexadecimal form
     IntHex = 0x11,
+    /// Data is true or false, encoded as 1 or 0 respectively
     IntBool = 0x12,
+    /// Data is a raw integer value in the form of #aarrggbb
     IntColorARGB8 = 0x1c,
+    /// Data is a raw integer value in the form of #rrggbb
     IntColorRGB8 = 0x1d,
+    /// Data is a raw integer value in the form of #argb
     IntColorARGB4 = 0x1e,
+    /// Data is a raw integer value in the form of #rgb
     IntColorRGB4 = 0x1f,
+};
+
+const Data = union(enum) {
+    Null: NullType,
+    Reference: u32,
+    Attribute: u32,
+    DynReference: u32,
+    DynAttribute: u32,
+    String: StringPool.Ref,
+    Float: f32,
+    Dimension: struct {
+        unit: DimensionUnit,
+        radix: Radix,
+        value: i24,
+    },
+    Fraction: struct {
+        unit: FractionUnit,
+        radix: Radix,
+        value: i24,
+    },
+    Int: union(enum) {
+        Dec: u32,
+        Hex: u32,
+        Bool: bool,
+        Color: union(enum) {
+            ARGB8: struct {
+                r: u8,
+                g: u8,
+                b: u8,
+                a: u8,
+            },
+            RGB8: struct {
+                r: u8,
+                g: u8,
+                b: u8,
+            },
+            ARGB4: struct {
+                r: u4,
+                g: u4,
+                b: u4,
+                a: u4,
+            },
+            RGB4: struct {
+                r: u4,
+                g: u4,
+                b: u4,
+            },
+        },
+    },
 };
 
 const DimensionUnit = enum(u4) {
@@ -31,17 +96,15 @@ const DimensionUnit = enum(u4) {
     Fraction = 0x6,
 };
 
-const FractionUnit = packed struct(u8) {
-    unit: enum(u1) {
-        Basic,
-        Parent,
-    },
-    radix: enum(u3) {
-        r23p0 = 0,
-        r16p7 = 1,
-        r8p15 = 2,
-        r0p23 = 3,
-    },
+const FractionUnit = enum(u1) {
+    Basic,
+    Parent,
+};
+const Radix = enum(u2) {
+    r23p0 = 0,
+    r16p7 = 1,
+    r8p15 = 2,
+    r0p23 = 3,
 };
 
 const NullType = enum(u1) {
@@ -49,21 +112,65 @@ const NullType = enum(u1) {
     Empty = 1,
 };
 
-datatype: DataType,
-data: u32,
+data: Data,
 
 // Runtime
 string_pool: ?*const StringPool,
 
 pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
-    var size = try reader.readInt(u16, .Little);
+    // Read number of bytes in the structure
+    const size = try reader.readInt(u16, .Little);
     _ = size;
-    var res0 = try reader.readInt(u8, .Little);
+    // Padding, should always be 0
+    const res0 = try reader.readInt(u8, .Little);
     _ = res0;
-    var datatype = @intToEnum(DataType, try reader.readInt(u8, .Little));
-    var data = try reader.readInt(u32, .Little);
+    const datatype = @intToEnum(DataType, try reader.readInt(u8, .Little));
+    // const raw_data = try reader.readInt(u32, .Little);
+    const data: Data = switch (datatype) {
+        .Null => .{ .Null = @intToEnum(NullType, try reader.readInt(u32, .Little)) },
+        .Reference => .{ .Reference = try reader.readInt(u32, .Little) },
+        .Attribute => .{ .Attribute = try reader.readInt(u32, .Little) },
+        .String => .{ .String = StringPool.Ref{ .index = try reader.readInt(u32, .Little) } },
+        .Float => .{ .Float = @bitCast(f32, try reader.readInt(u32, .Little)) },
+        .Dimension => .{ .Dimension = dimension: {
+            const description = try reader.readByte();
+            var unit = @intToEnum(DimensionUnit, @truncate(u4, description));
+            var radix = @intToEnum(Radix, @truncate(u4, description >> 4));
+            var value = try reader.readInt(i24, .Little);
+            break :dimension .{
+                .unit = unit,
+                .radix = radix,
+                .value = value,
+            };
+        } },
+        .Fraction => .{ .Fraction = fraction: {
+            const description = try reader.readByte();
+            var unit = @intToEnum(FractionUnit, @truncate(u4, description));
+            var radix = @intToEnum(Radix, @truncate(u4, description >> 4));
+            var value = try reader.readInt(i24, .Little);
+            break :fraction .{
+                .unit = unit,
+                .radix = radix,
+                .value = value,
+            };
+        } },
+        .DynReference => .{ .DynReference = try reader.readInt(u32, .Little) },
+        .DynAttribute => .{ .DynAttribute = try reader.readInt(u32, .Little) },
+        .IntBool => .{ .Int = .{ .Bool = try reader.readInt(u32, .Little) == 1 } },
+        .IntDec,
+        .IntHex,
+        .IntColorARGB8,
+        .IntColorRGB8,
+        .IntColorARGB4,
+        .IntColorRGB4,
+        => integer: {
+            // TODO: preserve type
+            const value = try reader.readInt(u32, .Little);
+            break :integer .{ .Int = .{ .Dec = value } };
+        },
+    };
     return .{
-        .datatype = datatype,
+        // .datatype = datatype,
         .data = data,
         .string_pool = string_pool,
     };
@@ -79,26 +186,20 @@ pub fn write(value: Value, writer: anytype) !void {
 pub fn format(value: Value, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
     _ = options;
     _ = fmt;
-    switch (value.datatype) {
-        .Null => {
-            if (value.data == 0) {
-                _ = try writer.write("undefined");
-            } else {
-                _ = try writer.write("empty");
-            }
+    switch (value.data) {
+        .Null => |data| {
+            try std.fmt.format(writer, "{s}", .{@tagName(data)});
         },
-        .Reference => {
-            try std.fmt.format(writer, "reference to {x}", .{value.data});
+        .Reference => |ref| {
+            try std.fmt.format(writer, "reference to {x}", .{ref});
         },
-        .Attribute => {
-            try std.fmt.format(writer, "attribute id {}", .{value.data});
+        .Attribute => |attr| {
+            try std.fmt.format(writer, "attribute id {}", .{attr});
         },
-        .String => {
+        .String => |string| {
             if (value.string_pool) |string_pool| {
-                if (string_pool.getUtf16Raw(value.data)) |str| {
-                    try std.fmt.format(writer, "\"{}\"", .{std.unicode.fmtUtf16le(str)});
-                } else if (string_pool.getUtf8Raw(value.data)) |str| {
-                    try std.fmt.format(writer, "\"{s}\"", .{str});
+                if (string_pool.get_formatter(string)) |str| {
+                    try std.fmt.format(writer, "\"{}\"", .{str});
                 } else {
                     try std.fmt.format(writer, "empty string {}", .{value.data});
                 }
@@ -106,43 +207,34 @@ pub fn format(value: Value, comptime fmt: []const u8, options: std.fmt.FormatOpt
                 try std.fmt.format(writer, "string id {}", .{value.data});
             }
         },
-        .Float => {
-            const float = @bitCast(f32, value.data);
+        .Float => |float| {
             try std.fmt.format(writer, "float {}", .{float});
         },
-        .Dimension => {
-            try std.fmt.format(writer, "dimension {x}", .{value.data});
+        .Dimension => |dimension| {
+            try std.fmt.format(writer, "dimension {}", .{dimension});
         },
-        .Fraction => {
-            try std.fmt.format(writer, "fraction {x}", .{value.data});
+        .Fraction => |fraction| {
+            try std.fmt.format(writer, "fraction {}", .{fraction});
         },
-        .DynReference => {
-            try std.fmt.format(writer, "dynamic reference {x}", .{value.data});
+        .DynReference => |ref| {
+            try std.fmt.format(writer, "dynamic reference {x}", .{ref});
         },
-        .DynAttribute => {
-            try std.fmt.format(writer, "dynamic attribute {x}", .{value.data});
+        .DynAttribute => |attr| {
+            try std.fmt.format(writer, "dynamic attribute {x}", .{attr});
         },
-        .IntDec => {
-            try std.fmt.format(writer, "integer decimal: {}", .{value.data});
-        },
-        .IntHex => {
-            try std.fmt.format(writer, "integer hex: {x}", .{value.data});
-        },
-        .IntBool => {
-            const bool_value = if (value.data == 0) "false" else "true";
-            try std.fmt.format(writer, "int bool: {} ({s})", .{ value.data, bool_value });
-        },
-        .IntColorARGB8 => {
-            try std.fmt.format(writer, "argb8 color: {x}", .{value.data});
-        },
-        .IntColorRGB8 => {
-            try std.fmt.format(writer, "rgb8 color: {x}", .{value.data});
-        },
-        .IntColorARGB4 => {
-            try std.fmt.format(writer, "argb4 color: {x}", .{value.data});
-        },
-        .IntColorRGB4 => {
-            try std.fmt.format(writer, "rgb4 color: {x}", .{value.data});
+        .Int => |int| switch (int) {
+            .Dec => |dec| {
+                try std.fmt.format(writer, "integer decimal: {}", .{dec});
+            },
+            .Hex => |hex| {
+                try std.fmt.format(writer, "integer hex: {x}", .{hex});
+            },
+            .Bool => |bint| {
+                try std.fmt.format(writer, "int bool: {}", .{bint});
+            },
+            .Color => |color| {
+                try std.fmt.format(writer, "color: {}", .{color});
+            },
         },
     }
 }

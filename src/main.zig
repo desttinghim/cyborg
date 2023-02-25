@@ -5,7 +5,6 @@ const archive = @import("archive");
 const c = @import("c.zig");
 pub const dex = @import("dex.zig");
 pub const binxml = @import("binxml.zig");
-pub const manifest = @import("manifest.zig");
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 
@@ -392,9 +391,11 @@ fn print_xml_tree(xml_tree: binxml.XMLTree, stdout: std.fs.File) !void {
                     if (xml_tree.string_pool.get_formatter(attr.*.name)) |name| {
                         try std.fmt.format(stdout.writer(), "{}", .{name});
                     }
-                    if (xml_tree.string_pool.get_formatter(attr.*.raw_value)) |raw| {
-                        try std.fmt.format(stdout.writer(), "={s}", .{raw});
-                    }
+                    // if (xml_tree.string_pool.get_formatter(attr.*.raw_value)) |raw| {
+                    //     try std.fmt.format(stdout.writer(), "={s}", .{raw});
+                    // } else {
+                    try std.fmt.format(stdout.writer(), "={s}", .{attr.*.typed_value});
+                    // }
                 }
                 try std.fmt.format(stdout.writer(), ">", .{});
             },

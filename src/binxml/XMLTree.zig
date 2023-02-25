@@ -51,9 +51,8 @@ pub const Builder = struct {
                 .name = attr_name_ref,
                 .raw_value = attr_value_ref,
                 .typed_value = .{
-                    .datatype = .String,
-                    .data = attr_value_ref.index,
-                    .string_pool = null,
+                    .data = .{ .String = attr_value_ref },
+                    .string_pool = &self.xml_tree.string_pool,
                 },
             });
         }
