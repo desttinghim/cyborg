@@ -1,11 +1,13 @@
 const std = @import("std");
 const libxml2 = @import("dep/zig-libxml2/libxml2.zig");
 
-pub fn build(b: *std.build.Builder) !void {
+pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     const zig_archive = b.dependency("zig_archive", .{});
+
+    const archive_mod = zig_archive.module("archive");
 
     const xml = try libxml2.create(b, target, optimize, .{
         .iconv = false,
@@ -13,13 +15,23 @@ pub fn build(b: *std.build.Builder) !void {
         .zlib = false,
     });
 
+    // TODO: figure out linking/includes for c dependencies with package manager
+    b.addModule(.{
+        .name = "cyborg",
+        .source_file = .{ .path = "src/main.zig" },
+        .dependencies = &.{.{
+            .name = "archive",
+            .module = archive_mod,
+        }},
+    });
+
     const lib = b.addStaticLibrary(.{
-        .name = "zandroid",
+        .name = "cyborg",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
     });
-    lib.addModule("archive", zig_archive.module("archive"));
+    lib.addModule("archive", archive_mod);
     xml.link(lib);
     lib.install();
 
@@ -33,7 +45,7 @@ pub fn build(b: *std.build.Builder) !void {
     test_step.dependOn(&main_tests.step);
 
     const exe = b.addExecutable(.{
-        .name = "zandroid",
+        .name = "cyborg",
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
         .optimize = optimize,
