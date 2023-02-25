@@ -15,25 +15,47 @@ pub const Builder = struct {
         };
     }
 
-    const Attribute_b = struct {};
+    pub const Attribute_b = struct {
+        namespace: ?[:0]const u8,
+        name: [:0]const u8,
+        value: [:0]const u8,
+    };
 
     const ElementOptions = struct {
         id: ?[]const u8 = null,
         class: ?[]const u8 = null,
         style: ?[]const u8 = null,
         line_number: ?u32 = null,
-        namespace: ?[*:0]const u8,
+        namespace: ?[]const u8,
     };
 
-    pub fn startElement(self: *Builder, name: [*:0]const u8, attributes: []const Attribute_b, opt: ElementOptions) !void {
+    pub fn startElement(self: *Builder, name: []const u8, attributes: []const Attribute_b, opt: ElementOptions) !void {
         const comment_ref = try self.xml_tree.string_pool.insert(self.allocator, "comment");
         const namespace_ref = if (opt.namespace) |namespace|
-            try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(namespace))
+            try self.xml_tree.string_pool.insert(self.allocator, (namespace))
         else
             self.xml_tree.string_pool.get_null_ref();
-        const name_ref = try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(name));
-        for (attributes) |_| {
+        const name_ref = try self.xml_tree.string_pool.insert(self.allocator, (name));
+        const node_id = self.xml_tree.nodes.items.len;
+        for (attributes) |attr| {
             // TODO:
+            const attr_name_ref = try self.xml_tree.string_pool.insert(self.allocator, (attr.name));
+            const attr_namespace_ref = if (attr.namespace) |namespace|
+                try self.xml_tree.string_pool.insert(self.allocator, (namespace))
+            else
+                self.xml_tree.string_pool.get_null_ref();
+            const attr_value_ref = try self.xml_tree.string_pool.insert(self.allocator, attr.value);
+            try self.xml_tree.attributes.append(self.allocator, .{
+                .node = node_id,
+                .namespace = attr_namespace_ref,
+                .name = attr_name_ref,
+                .raw_value = attr_value_ref,
+                .typed_value = .{
+                    .datatype = .String,
+                    .data = attr_value_ref.index,
+                    .string_pool = null,
+                },
+            });
         }
         try self.xml_tree.nodes.append(self.allocator, .{
             .line_number = opt.line_number orelse 0,
@@ -50,13 +72,13 @@ pub const Builder = struct {
             } },
         });
     }
-    pub fn endElement(self: *Builder, name: [*:0]const u8, opt: ElementOptions) !void {
+    pub fn endElement(self: *Builder, name: []const u8, opt: ElementOptions) !void {
         const comment_ref = try self.xml_tree.string_pool.insert(self.allocator, "comment");
         const namespace_ref = if (opt.namespace) |namespace|
-            try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(namespace))
+            try self.xml_tree.string_pool.insert(self.allocator, (namespace))
         else
             self.xml_tree.string_pool.get_null_ref();
-        const name_ref = try self.xml_tree.string_pool.insert(self.allocator, std.mem.span(name));
+        const name_ref = try self.xml_tree.string_pool.insert(self.allocator, (name));
         try self.xml_tree.nodes.append(self.allocator, .{
             .line_number = 0,
             .comment = comment_ref,
@@ -67,8 +89,18 @@ pub const Builder = struct {
         });
     }
 
-    pub fn startNamespace(self: *Builder) !void {
-        _ = self;
+    pub fn startNamespace(self: *Builder, uri: []const u8, prefix: []const u8) !void {
+        const comment_ref = try self.xml_tree.string_pool.insert(self.allocator, "comment");
+        const uri_ref = try self.xml_tree.string_pool.insert(self.allocator, (uri));
+        const prefix_ref = try self.xml_tree.string_pool.insert(self.allocator, (prefix));
+        try self.xml_tree.nodes.append(self.allocator, .{
+            .line_number = 0,
+            .comment = comment_ref,
+            .extended = .{ .Namespace = .{
+                .uri = uri_ref,
+                .prefix = prefix_ref,
+            } },
+        });
     }
     pub fn endNamespace(self: *Builder) !void {
         _ = self;

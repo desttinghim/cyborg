@@ -49,8 +49,6 @@ const NullType = enum(u1) {
     Empty = 1,
 };
 
-size: u16,
-res0: u8,
 datatype: DataType,
 data: u32,
 
@@ -58,14 +56,17 @@ data: u32,
 string_pool: ?*const StringPool,
 
 pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
-    var value = Value{
-        .size = try reader.readInt(u16, .Little),
-        .res0 = try reader.readInt(u8, .Little),
-        .datatype = @intToEnum(DataType, try reader.readInt(u8, .Little)),
-        .data = try reader.readInt(u32, .Little),
+    var size = try reader.readInt(u16, .Little);
+    _ = size;
+    var res0 = try reader.readInt(u8, .Little);
+    _ = res0;
+    var datatype = @intToEnum(DataType, try reader.readInt(u8, .Little));
+    var data = try reader.readInt(u32, .Little);
+    return .{
+        .datatype = datatype,
+        .data = data,
         .string_pool = string_pool,
     };
-    return value;
 }
 
 pub fn write(value: Value, writer: anytype) !void {

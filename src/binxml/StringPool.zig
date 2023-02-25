@@ -138,7 +138,7 @@ fn format(
         switch (full_ref.pool.data) {
             .Utf8 => {
                 const str = full_ref.pool.getUtf8(full_ref.ref) orelse break :null_ref;
-                _ = try writer.writeAll(str);
+                try writer.print("{s}", .{str});
                 return;
             },
             .Utf16 => {
@@ -151,7 +151,8 @@ fn format(
     _ = try writer.writeAll("[NULL]");
 }
 
-pub fn get_formatter(self: StringPool, refe: Ref) std.fmt.Formatter(format) {
+pub fn get_formatter(self: StringPool, refe: Ref) ?std.fmt.Formatter(format) {
+    if (refe.is_null()) return null;
     return .{ .data = .{ .pool = self, .ref = refe } };
 }
 
