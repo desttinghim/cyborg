@@ -130,30 +130,35 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     while (ret == 1) : (ret = c.xmlTextReaderRead(reader)) {
         try print_node(stdout, reader);
         var node_type = @intToEnum(XMLReaderType, c.xmlTextReaderNodeType(reader));
-        const name = c.xmlTextReaderConstName(reader).?;
-        const line_number = c.xmlTextReaderGetParserLineNumber(reader);
+        const line_number = @intCast(u32, c.xmlTextReaderGetParserLineNumber(reader));
         switch (node_type) {
             .Element => {
-                try builder.startElement(
-                    name,
-                    &.{},
-                    .{
-                        .namespace = c.xmlTextReaderConstNamespaceUri(reader),
-                        .line_number = @intCast(u32, line_number),
-                    },
-                );
+                const name = c.xmlTextReaderConstName(reader) orelse return error.MissingNameForElement;
+                const namespace = c.xmlTextReaderConstNamespaceUri(reader);
+                try builder.startElement(name, &.{}, .{
+                    .namespace = namespace,
+                    .line_number = line_number,
+                });
+                if (c.xmlTextReaderIsEmptyElement(reader) == 1) {
+                    try builder.endElement(name, .{
+                        .namespace = namespace,
+                        .line_number = line_number,
+                    });
+                }
             },
-            .EndElement => try builder.endElement(name, .{
-                .namespace = c.xmlTextReaderConstNamespaceUri(reader),
-            }),
+            .EndElement => {
+                const name = c.xmlTextReaderConstName(reader) orelse return error.MissingNameForEndElement;
+                try builder.endElement(name, .{
+                    .namespace = c.xmlTextReaderConstNamespaceUri(reader),
+                    .line_number = line_number,
+                });
+            },
             // .CData => builder.insertCData(.{}),
             else => {},
         }
     }
 
-    for (builder.xml_tree.nodes.items) |node| {
-        try stdout.writer().print("{s}\n", .{@tagName(node.extended)});
-    }
+    try print_xml_tree(builder.xml_tree, stdout);
 }
 
 pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
@@ -284,112 +289,10 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 }
 
 fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
-    var indent: usize = 0;
-
     for (document.chunks.items) |chunk| {
         switch (chunk) {
-            .Xml => |xml_tree| {
-                for (xml_tree.nodes.items, 0..) |node, node_id| {
-                    if (node.extended == .Attribute) {
-                        indent += 1;
-                    }
-                    var iloop: usize = 1;
-                    while (iloop < indent) : (iloop += 1) {
-                        try std.fmt.format(stdout, "\t", .{});
-                    }
-                    switch (node.extended) {
-                        .CData => |cdata| {
-                            const data = xml_tree.string_pool.getUtf16(cdata.data) orelse &[_]u16{};
-
-                            try std.fmt.format(stdout.writer(), "{}", .{
-                                std.unicode.fmtUtf16le(data),
-                            });
-                        },
-                        .Namespace => |namespace| {
-                            const prefix = xml_tree.string_pool.getUtf16(namespace.prefix) orelse &[_]u16{};
-                            const uri = xml_tree.string_pool.getUtf16(namespace.uri) orelse &[_]u16{};
-
-                            try std.fmt.format(stdout.writer(), "xmlns:{}={}", .{
-                                std.unicode.fmtUtf16le(prefix),
-                                std.unicode.fmtUtf16le(uri),
-                            });
-                        },
-                        .EndElement => |end| {
-                            const name = xml_tree.string_pool.getUtf16(end.name) orelse &[_]u16{};
-                            try std.fmt.format(stdout.writer(), "</{}>", .{std.unicode.fmtUtf16le(name)});
-                        },
-                        .Attribute => |attribute| {
-                            try std.fmt.format(stdout.writer(), "<", .{});
-                            {
-                                if (xml_tree.string_pool.getUtf16(attribute.namespace)) |ns| {
-                                    try std.fmt.format(stdout.writer(), "{}:", .{std.unicode.fmtUtf16le(ns)});
-                                }
-                                if (xml_tree.string_pool.getUtf16(attribute.name)) |name| {
-                                    try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
-                                }
-                            }
-                            for (xml_tree.attributes.items) |*attr| {
-                                if (attr.*.node != node_id) continue;
-                                try std.fmt.format(stdout, "\n", .{});
-                                var iloop2: usize = 1;
-                                while (iloop2 < indent + 1) : (iloop2 += 1) {
-                                    try std.fmt.format(stdout, "\t", .{});
-                                }
-                                if (xml_tree.string_pool.getUtf16(attr.*.namespace)) |ns| {
-                                    try std.fmt.format(stdout.writer(), "{}/", .{std.unicode.fmtUtf16le(ns)});
-                                }
-                                if (xml_tree.string_pool.getUtf16(attr.*.name)) |name| {
-                                    try std.fmt.format(stdout.writer(), "{}", .{std.unicode.fmtUtf16le(name)});
-                                }
-                                if (xml_tree.string_pool.getUtf16(attr.*.raw_value)) |raw| {
-                                    try std.fmt.format(stdout.writer(), "={}", .{std.unicode.fmtUtf16le(raw)});
-                                } else {
-                                    attr.*.typed_value.string_pool = &xml_tree.string_pool;
-                                    try std.fmt.format(stdout.writer(), "={s}", .{
-                                        attr.*.typed_value,
-                                        // @tagName(attr.typed_value.datatype),
-                                    });
-                                }
-                            }
-                            try std.fmt.format(stdout.writer(), ">", .{});
-                        },
-                    }
-                    try std.fmt.format(stdout.writer(), "\n", .{});
-                    if (node.extended == .EndElement) {
-                        indent -= 1;
-                    }
-                }
-            },
-            .Table => |table| {
-                for (table.packages.items) |package| {
-                    try std.fmt.format(stdout.writer(), "Package {} (ID {})\n", .{ std.unicode.fmtUtf16le(package.name), package.id });
-                    try std.fmt.format(stdout.writer(), "\tType Strings {}\n\tLast Public Type {}\n\tKey Strings {}\n\tLast Public Key {}\n\tType ID Offset {}\n", .{
-                        package.type_strings,
-                        package.last_public_type,
-                        package.key_strings,
-                        package.last_public_key,
-                        package.type_id_offset,
-                    });
-                    for (package.type_spec.items) |type_spec| {
-                        try std.fmt.format(stdout.writer(), "\tType Spec {}\n", .{type_spec.id});
-                        for (type_spec.entry_indices) |*entry| {
-                            try std.fmt.format(stdout.writer(), "\t\t{}\n", .{entry.*});
-                        }
-                    }
-                    for (package.table_type.items) |table_type| {
-                        try std.fmt.format(stdout.writer(), "\tTable Type {}, {}\n", .{ table_type.id, table_type.flags });
-                        // try std.fmt.format(stdout.writer(), "\t\tConfig: {}\n", .{table_type.config});
-                        for (table_type.entries.items) |*entry| {
-                            if (entry.*.value) |*value| {
-                                value.*.string_pool = &package.key_string_pool;
-                            }
-                            if (package.key_string_pool.getUtf16(entry.key)) |entry_string| {
-                                try std.fmt.format(stdout.writer(), "\t\t{}: {?}\n", .{ std.unicode.fmtUtf16le(entry_string), entry.value });
-                            }
-                        }
-                    }
-                }
-            },
+            .Xml => |xml_tree| try print_xml_tree(xml_tree, stdout),
+            .Table => |table| try print_table(table, stdout),
             .StringPool => |string_pool| {
                 try std.fmt.format(stdout, "String Pool chunk:\n", .{});
                 for (0..string_pool.get_len()) |index| {
@@ -403,6 +306,108 @@ fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
                     }
                 }
             },
+        }
+    }
+}
+
+fn print_xml_tree(xml_tree: binxml.XMLTree, stdout: std.fs.File) !void {
+    var indent: usize = 0;
+    for (xml_tree.nodes.items, 0..) |node, node_id| {
+        if (node.extended == .Attribute) {
+            indent += 1;
+        }
+        var iloop: usize = 1;
+        while (iloop < indent) : (iloop += 1) {
+            try std.fmt.format(stdout, "\t", .{});
+        }
+        switch (node.extended) {
+            .CData => |cdata| {
+                const data = xml_tree.string_pool.get_formatter(cdata.data);
+
+                try std.fmt.format(stdout.writer(), "{}", .{data});
+            },
+            .Namespace => |namespace| {
+                const prefix = xml_tree.string_pool.get_formatter(namespace.prefix);
+                const uri = xml_tree.string_pool.get_formatter(namespace.uri);
+
+                try std.fmt.format(stdout.writer(), "xmlns:{}={}", .{
+                    prefix,
+                    uri,
+                });
+            },
+            .EndElement => |end| {
+                const name = xml_tree.string_pool.get_formatter(end.name);
+                try std.fmt.format(stdout.writer(), "</{}>", .{name});
+            },
+            .Attribute => |attribute| {
+                try std.fmt.format(stdout.writer(), "<", .{});
+                {
+                    if (!attribute.namespace.is_null()) {
+                        const ns = xml_tree.string_pool.get_formatter(attribute.namespace);
+                        try std.fmt.format(stdout.writer(), "{}:", .{ns});
+                    }
+                    const name = xml_tree.string_pool.get_formatter(attribute.name);
+                    try std.fmt.format(stdout.writer(), "{}", .{name});
+                }
+                for (xml_tree.attributes.items) |*attr| {
+                    if (attr.*.node != node_id) continue;
+                    try std.fmt.format(stdout, "\n", .{});
+                    var iloop2: usize = 1;
+                    while (iloop2 < indent + 1) : (iloop2 += 1) {
+                        try std.fmt.format(stdout, "\t", .{});
+                    }
+                    const ns = (xml_tree.string_pool.get_formatter(attr.*.namespace));
+                    try std.fmt.format(stdout.writer(), "{}/", .{ns});
+                    const name = xml_tree.string_pool.get_formatter(attr.*.name);
+                    try std.fmt.format(stdout.writer(), "{}", .{name});
+                    if (!attr.*.raw_value.is_null()) {
+                        const raw = xml_tree.string_pool.get_formatter(attr.*.raw_value);
+                        try std.fmt.format(stdout.writer(), "={s}", .{raw});
+                    } else {
+                        attr.*.typed_value.string_pool = &xml_tree.string_pool;
+                        try std.fmt.format(stdout.writer(), "={s}", .{
+                            attr.*.typed_value,
+                            // @tagName(attr.typed_value.datatype),
+                        });
+                    }
+                }
+                try std.fmt.format(stdout.writer(), ">", .{});
+            },
+        }
+        try std.fmt.format(stdout.writer(), "\n", .{});
+        if (node.extended == .EndElement) {
+            indent -= 1;
+        }
+    }
+}
+
+fn print_table(table: binxml.ResourceTable, stdout: std.fs.File) !void {
+    for (table.packages.items) |package| {
+        try std.fmt.format(stdout.writer(), "Package {} (ID {})\n", .{ std.unicode.fmtUtf16le(package.name), package.id });
+        try std.fmt.format(stdout.writer(), "\tType Strings {}\n\tLast Public Type {}\n\tKey Strings {}\n\tLast Public Key {}\n\tType ID Offset {}\n", .{
+            package.type_strings,
+            package.last_public_type,
+            package.key_strings,
+            package.last_public_key,
+            package.type_id_offset,
+        });
+        for (package.type_spec.items) |type_spec| {
+            try std.fmt.format(stdout.writer(), "\tType Spec {}\n", .{type_spec.id});
+            for (type_spec.entry_indices) |*entry| {
+                try std.fmt.format(stdout.writer(), "\t\t{}\n", .{entry.*});
+            }
+        }
+        for (package.table_type.items) |table_type| {
+            try std.fmt.format(stdout.writer(), "\tTable Type {}, {}\n", .{ table_type.id, table_type.flags });
+            // try std.fmt.format(stdout.writer(), "\t\tConfig: {}\n", .{table_type.config});
+            for (table_type.entries.items) |*entry| {
+                if (entry.*.value) |*value| {
+                    value.*.string_pool = &package.key_string_pool;
+                }
+                if (package.key_string_pool.getUtf16(entry.key)) |entry_string| {
+                    try std.fmt.format(stdout.writer(), "\t\t{}: {?}\n", .{ std.unicode.fmtUtf16le(entry_string), entry.value });
+                }
+            }
         }
     }
 }

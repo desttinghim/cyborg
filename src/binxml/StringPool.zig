@@ -18,6 +18,9 @@ const Data = union(enum) {
 pub const Ref = struct {
     index: u32,
 
+    pub fn is_null(self: Ref) bool {
+        return self.index == std.math.maxInt(u32);
+    }
     pub fn read(reader: anytype) !Ref {
         return Ref{ .index = try reader.readInt(u32, .Little) };
     }
@@ -115,6 +118,41 @@ pub fn getUtf8Raw(self: StringPool, index: u32) ?[]const u8 {
     if (self.data != .Utf8 or index == std.math.maxInt(u32)) return null;
     const span = self.data.Utf8.slices.items[index];
     return self.data.Utf8.pool.items[span.start..span.end];
+}
+
+const FullRef = struct {
+    pool: StringPool,
+    ref: Ref,
+};
+
+/// Print the given `utf8` string
+fn format(
+    full_ref: FullRef,
+    comptime fmt: []const u8,
+    options: std.fmt.FormatOptions,
+    writer: anytype,
+) !void {
+    _ = fmt;
+    _ = options;
+    null_ref: {
+        switch (full_ref.pool.data) {
+            .Utf8 => {
+                const str = full_ref.pool.getUtf8(full_ref.ref) orelse break :null_ref;
+                _ = try writer.writeAll(str);
+                return;
+            },
+            .Utf16 => {
+                const formatter = std.unicode.fmtUtf16le(full_ref.pool.getUtf16(full_ref.ref) orelse break :null_ref);
+                try writer.print("{}", .{formatter});
+                return;
+            },
+        }
+    }
+    _ = try writer.writeAll("[NULL]");
+}
+
+pub fn get_formatter(self: StringPool, refe: Ref) std.fmt.Formatter(format) {
+    return .{ .data = .{ .pool = self, .ref = refe } };
 }
 
 pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: ResourceChunk.Header, alloc: std.mem.Allocator) !StringPool {
