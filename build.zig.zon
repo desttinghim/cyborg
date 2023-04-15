@@ -2,13 +2,9 @@
     .name = "cyborg",
     .version = "0.0.0",
     .dependencies = .{
-        .parser_toolkit = .{
-            .url = "https://github.com/MasterQ32/parser-toolkit/archive/9e14471a873dba6afc4303eb3a100ac8937587bf.tar.gz",
-            .hash = "122045a8ae4353dc68bcce680113b4a504070ba79169da93098ab032b0061fd620cd",
-        },
         .zig_archive = .{
-            .url = "https://github.com/desttinghim/zig-archive/archive/d65c7c7625741f33f3e63a7b14cb1a4e7beeca15.tar.gz",
-            .hash = "1220c8daf0ffd7b3dca16896b06c8ebb1977e154aa2ffe9cb9fbbd3c9d82ec98be48",
+            .url = "https://github.com/desttinghim/zig-archive/archive/b009109948c148336a6a703efbcffff2ef4c0657.tar.gz",
+            .hash = "12201d581735015664f3ba9590fc0b9e82340272a5d352d5eb9794f293347913ce46",
         },
     },
 }

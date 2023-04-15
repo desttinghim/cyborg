@@ -16,14 +16,14 @@ pub fn build(b: *std.Build) !void {
     });
 
     // TODO: figure out linking/includes for c dependencies with package manager
-    b.addModule(.{
-        .name = "cyborg",
+    const cyborg_module = b.addModule("cyborg", .{
         .source_file = .{ .path = "src/main.zig" },
         .dependencies = &.{.{
             .name = "archive",
             .module = archive_mod,
         }},
     });
+    _ = cyborg_module;
 
     const lib = b.addStaticLibrary(.{
         .name = "cyborg",
