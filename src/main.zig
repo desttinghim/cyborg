@@ -13,6 +13,8 @@ const usage =
     \\SUBCOMMANDS:
     \\  zip     <file>                  Reads a zip file and lists the contents
     \\  zip     <file> <filename>       Reads the contents of a file from a zip file
+    \\  align   <file>                  Aligns a zip file
+    \\  sign    <file>                  Signs an APK file
     \\  binxml  <file>                  Reads an Android binary XML file
     \\  xml     <file>                  Converts an XML file to an Android binary XML file
     \\  apk     <file>                  Reads the AndroidManifest.xml in the indicated apk
@@ -26,6 +28,8 @@ const Subcommand = enum {
     binxml,
     apk,
     dex,
+    @"align",
+    sign,
     // pkg,
 };
 
@@ -59,6 +63,8 @@ pub fn run(stdout: std.fs.File) !void {
         .xml => try readXml(alloc, args, stdout),
         .apk => try readApk(alloc, args, stdout),
         .dex => try readDex(alloc, args, stdout),
+        .@"align" => try alignZip(alloc, args, stdout),
+        .sign => try signZip(alloc, args, stdout),
         // .pkg => try writePackage(alloc, args, stdout),
     }
 }
@@ -190,6 +196,100 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 }
 
 pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+    const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+    const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
+    const dir = try std.fs.openDirAbsolute(dirpath, .{});
+    const file = try dir.openFile(filepath, .{});
+
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &std.io.StreamSource{ .file = file });
+
+    try archive_reader.load();
+
+    for (archive_reader.directory.items, 0..) |cd_record, i| {
+        _ = cd_record;
+        const header = archive_reader.getHeader(i);
+        _ = try stdout.write(header.filename);
+        _ = try stdout.write("\n");
+    }
+}
+
+const SigningEntry = struct {
+    id: u32,
+    value: union(u32) {},
+};
+
+const SigningBlock = struct {
+    size_of_block: u64,
+    entries: []SigningEntry,
+    // size_of_block repeated
+    magic: [16]u8 = "APK Sig Block 42",
+};
+
+const SignatureAlgorithm = enum(u32) {
+    /// RSASSA-PSS with SHA2-256 digest, SHA2-256 MGF1, 32 bytes of salt, trailer: 0xbc
+    RSASSA_PSS = 0x0101,
+    /// RSASSA-PSS with SHA2-512 digest, SHA2-512 MGF1, 64 bytes of salt, trailer: 0xbc
+    RSASSA_PSS = 0x0102,
+    /// RSASSA-PKCS1-v1_5 with SHA2-256 digest. This is for build systems which require deterministic signatures.
+    RSASSA_PKCS1_v1_5 = 0x0103,
+    /// RSASSA-PKCS1-v1_5 with SHA2-512 digest. This is for build systems which require deterministic signatures.
+    RSASSA_PKCS1_v1_5 = 0x0104,
+    /// ECDSA with SHA2-256 digest
+    ECDSA = 0x0201,
+    /// ECDSA with SHA2-512 digest
+    ECDSA = 0x0202,
+    /// DSA with SHA2-256 digest
+    DSA = 0x0301,
+};
+
+const Digest = struct {};
+const X509 = struct {};
+const Attribute = struct {};
+
+const SignedData = struct {
+    digests: [][]Digest,
+    certificates: []X509,
+    attributes: []Attribute,
+};
+
+const Signature = struct {
+    algorithm: SignatureAlgorithm,
+    signature: []const u8,
+};
+
+const Signer = struct {
+    signed_data: []SignedData,
+    signatures: []Signature,
+    public_key: []const u8,
+};
+
+/// Stored inside SigningBlock
+const SignatureSchemeBlock = struct {
+    const ID = 0x7109871a;
+    signers: []Signer,
+};
+
+pub fn signZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+    _ = stdout;
+    const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+    const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
+    const dir = try std.fs.openDirAbsolute(dirpath, .{});
+    const file = try dir.openFile(filepath, .{});
+
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &std.io.StreamSource{ .file = file });
+
+    try archive_reader.load();
+
+    // TODO: parse signing options
+
+    // TODO: Read zip archive into memory
+
+    // TODO: Sign with specified options
+
+    // TODO: Write new zip file with signing block added
+}
+
+pub fn alignZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
     const filepath = try std.fs.realpathAlloc(alloc, args[2]);
     const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
@@ -391,11 +491,7 @@ fn print_xml_tree(xml_tree: binxml.XMLTree, stdout: std.fs.File) !void {
                     if (xml_tree.string_pool.get_formatter(attr.*.name)) |name| {
                         try std.fmt.format(stdout.writer(), "{}", .{name});
                     }
-                    // if (xml_tree.string_pool.get_formatter(attr.*.raw_value)) |raw| {
-                    //     try std.fmt.format(stdout.writer(), "={s}", .{raw});
-                    // } else {
                     try std.fmt.format(stdout.writer(), "={s}", .{attr.*.typed_value});
-                    // }
                 }
                 try std.fmt.format(stdout.writer(), ">", .{});
             },
