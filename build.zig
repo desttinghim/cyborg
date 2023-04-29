@@ -33,7 +33,8 @@ pub fn build(b: *std.Build) !void {
     });
     lib.addModule("archive", archive_mod);
     xml.link(lib);
-    lib.install();
+
+    b.installArtifact(lib);
 
     const main_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/main.zig" },
@@ -52,7 +53,8 @@ pub fn build(b: *std.Build) !void {
     });
     exe.addModule("archive", zig_archive.module("archive"));
     xml.link(exe);
-    exe.install();
+
+    b.installArtifact(exe);
 
     const run_cmd = exe.run();
     run_cmd.step.dependOn(b.getInstallStep());
