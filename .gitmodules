@@ -1,2 +1,3 @@
 [submodule "dep/zig-libxml2"]
 	url = https://github.com/mitchellh/zig-libxml2
+	path = dep/zig-libxml2
