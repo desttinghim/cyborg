@@ -3,8 +3,8 @@
     .version = "0.0.0",
     .dependencies = .{
         .zig_archive = .{
-            .url = "https://github.com/desttinghim/zig-archive/archive/b009109948c148336a6a703efbcffff2ef4c0657.tar.gz",
-            .hash = "12201d581735015664f3ba9590fc0b9e82340272a5d352d5eb9794f293347913ce46",
+            .url = "https://github.com/desttinghim/zig-archive/archive/26ec93c2e023c75ce9313cc28da54552b7f00926.tar.gz",
+            .hash = "12207348b607af4cf237af5ddf2821e08ce5e746a682660248ac9623b590b3b7117e",
         },
     },
 }
