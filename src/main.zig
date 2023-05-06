@@ -15,6 +15,7 @@ const usage =
     \\  zip     <file>                  Reads a zip file and lists the contents
     \\  zip     <file> <filename>       Reads the contents of a file from a zip file
     \\  align   <file>                  Aligns a zip file
+    \\  verify  <file>                  Verifies the signature of an APK file
     \\  sign    <file>                  Signs an APK file
     \\  binxml  <file>                  Reads an Android binary XML file
     \\  xml     <file>                  Converts an XML file to an Android binary XML file
@@ -31,6 +32,7 @@ const Subcommand = enum {
     dex,
     @"align",
     sign,
+    verify,
     // pkg,
 };
 
@@ -66,6 +68,7 @@ pub fn run(stdout: std.fs.File) !void {
         .dex => try readDex(alloc, args, stdout),
         .@"align" => try alignZip(alloc, args, stdout),
         .sign => try signZip(alloc, args, stdout),
+        .verify => try verifyAPK(alloc, args, stdout),
         // .pkg => try writePackage(alloc, args, stdout),
     }
 }
@@ -235,9 +238,148 @@ pub fn signZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 }
 
 pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
-    _ = stdout;
-    _ = args;
-    _ = alloc;
+    const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+    const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
+    const dir = try std.fs.openDirAbsolute(dirpath, .{});
+    const file = try dir.openFile(filepath, .{});
+
+    var stream_source = std.io.StreamSource{ .file = file };
+
+    var buf: [16]u8 = undefined;
+
+    std.debug.assert(16 == try stream_source.read(&buf));
+    try stream_source.seekTo(0);
+
+    try stdout.writer().print("Opening {s}\n", .{filepath});
+
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
+    try archive_reader.load();
+
+    try stdout.writer().print("Loaded archive\n", .{});
+
+    // Verify that the magic bytes are present
+
+    const magic_byte_offset = archive_reader.directory_offset - 16;
+
+    try stream_source.seekTo(magic_byte_offset);
+
+    std.debug.assert(try stream_source.read(&buf) == 16);
+
+    if (!std.mem.eql(u8, &buf, "APK Sig Block 42")) return error.MissingSigningBlock;
+
+    // Get the block size
+
+    const block_size_offset = magic_byte_offset - 8;
+
+    try stream_source.seekTo(block_size_offset);
+
+    const block_size = try stream_source.reader().readInt(u64, .Little);
+
+    const block_start = archive_reader.directory_offset - block_size;
+
+    try stdout.writer().print("Signing block starts at {} and contains {} bytes\n", .{ block_start, block_size });
+
+    const block_size_offset_2 = block_start - 8;
+
+    try stream_source.seekTo(block_size_offset_2);
+
+    const block_size_2 = try stream_source.reader().readInt(u64, .Little);
+
+    if (block_size != block_size_2) {
+        try stdout.writer().print("First and second block size mismatch! {} != {}\n", .{ block_size, block_size_2 });
+        return error.BlockSizeMismatch;
+    }
+
+    const OffsetSlice = struct { u64, u64 };
+
+    var id_value_pairs = std.AutoArrayHashMap(u32, OffsetSlice).init(alloc);
+    defer id_value_pairs.deinit();
+
+    // var id_value_arena = std.heap.ArenaAllocator.init(alloc);
+    // defer id_value_arena.deinit();
+    // const id_value_alloc = id_value_arena.allocator();
+
+    while (try stream_source.getPos() < block_size_offset) {
+        const size = try stream_source.reader().readInt(u64, .Little);
+        const id = try stream_source.reader().readInt(u32, .Little);
+        // const bytes = try id_value_alloc.alloc(u8, size - 4); // -4 to account for id
+        // std.debug.assert(try stream_source.read(bytes) == size - 4);
+
+        try id_value_pairs.put(id, .{ try stream_source.getPos(), size });
+    }
+
+    const v2_block = id_value_pairs.get(0x7109871a) orelse return error.MissingV2;
+    const v2_offset = v2_block.@"0";
+    const v2_size = v2_block.@"1";
+    _ = v2_size;
+    try stream_source.seekTo(v2_offset);
+    const signer_length = try stream_source.reader().readInt(u32, .Little);
+    const signer_pos = try stream_source.getPos();
+    while (try stream_source.getPos() < signer_pos + signer_length - 4) {
+        const signed_data_length = try stream_source.reader().readInt(u32, .Little);
+        const signed_data_pos = try stream_source.getPos();
+        _ = signed_data_pos;
+        try stdout.writer().print("Signer of length {}\n", .{signed_data_length});
+
+        // Signed Data
+        // while (try stream_source.getPos() < signed_data_pos + signed_data_length) {
+        {
+            const digest_chunks_total_length = try stream_source.reader().readInt(u32, .Little);
+            try stdout.writer().print("Total length of digest chunks: {}\n", .{digest_chunks_total_length});
+            const digest_chunks_length = try stream_source.reader().readInt(u32, .Little);
+            const digest_chunks_pos = try stream_source.getPos();
+            try stdout.writer().print("Digest chunk of length {}\n", .{digest_chunks_length});
+            while (try stream_source.getPos() < digest_chunks_pos + digest_chunks_length) {
+                const digest_chunk_length = try stream_source.reader().readInt(u32, .Little);
+                const digest_chunk_pos = try stream_source.getPos();
+                const signature_algorithm_id = try stream_source.reader().readInt(u32, .Little);
+                const digest_length = try stream_source.reader().readInt(u32, .Little);
+                try stdout.writer().print("Digest signature algorithm id {x}; length {}\n", .{ signature_algorithm_id, digest_length });
+                try stream_source.seekTo(digest_chunk_pos + digest_chunk_length);
+            }
+
+            const x509_list_length = try stream_source.reader().readInt(u32, .Little);
+            const x509_list_pos = try stream_source.getPos();
+            while (try stream_source.getPos() < x509_list_pos + x509_list_length) {
+                const x509_length = try stream_source.reader().readInt(u32, .Little);
+                try stdout.writer().print("x509 Certificate of length {}\n", .{x509_length});
+                try stream_source.seekBy(x509_length);
+            }
+
+            const attribute_list_length = try stream_source.reader().readInt(u32, .Little);
+            const attribute_list_pos = try stream_source.getPos();
+            while (try stream_source.getPos() < attribute_list_pos + attribute_list_length) {
+                const attribute_length = try stream_source.reader().readInt(u32, .Little);
+                const attribute_id = try stream_source.reader().readInt(u32, .Little);
+                try stdout.writer().print("Attribute length {}; id: {}\n", .{ attribute_length, attribute_id });
+                try stream_source.seekBy(attribute_length - 4);
+            }
+        }
+
+        // Signatures
+        const signatures_length = try stream_source.reader().readInt(u32, .Little);
+        const signatures_pos = try stream_source.getPos();
+        try stdout.writer().print("Signatures block of length {}\n", .{signatures_length});
+        while (try stream_source.getPos() < signatures_pos + signatures_length) {
+            const signature_length = try stream_source.reader().readInt(u32, .Little);
+            const signature_pos = try stream_source.getPos();
+            _ = signature_pos;
+            const signature_algorithm_id = try stream_source.reader().readInt(u32, .Little);
+            try stdout.writer().print("Signature id {}, length {} \n", .{ signature_algorithm_id, signature_length });
+            const signature_over_data_length = try stream_source.reader().readInt(u32, .Little);
+            _ = signature_over_data_length;
+            try stream_source.seekBy(signature_length - 8);
+        }
+
+        // Public Key
+        const public_key_length = try stream_source.reader().readInt(u32, .Little);
+        const public_key_pos = try stream_source.getPos();
+        _ = public_key_pos;
+        try stdout.writer().print("Public key block of length {}\n", .{public_key_length});
+        try stream_source.seekBy(public_key_length - 4);
+    }
+
+    try stdout.writer().print("End of signing block\n", .{});
 }
 
 pub fn alignZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
