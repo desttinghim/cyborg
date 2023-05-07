@@ -342,75 +342,14 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
                 const hex = std.fmt.fmtSliceHexUpper(buf[0..x509_length]);
                 try stdout.writer().print("{s}\n", .{hex});
 
-                const Length = packed struct {
-                    is_long: bool,
-                    value: u7,
-                    bytes: [*]u8,
-                };
-
-                const ASN1 = struct {
-                    class: TagClass,
-                    is_constructed: bool, // if true, Constructed, else, Primitive
-                    length: Length,
-
-                    const TagClass = enum {
-                        Universal,
-                        Application,
-                        ContextSpecific,
-                        Private,
-                    };
-
-                    const TagID = enum(u64) {
-                        Integer = 0x02,
-                        BitString = 0x03,
-                        ObjectIdentifier = 0x06,
-                        PrintableString = 0x13,
-                        UTCTime = 0x17,
-                        Sequence = 0x10,
-                        Set = 0x11,
-                        _,
-                    };
-                };
-
                 const x509 = buf[0..x509_length];
 
-                const asn_type_raw = x509[0];
-                const asn_class_raw = @truncate(u2, asn_type_raw & 0b1100_0000 >> 6);
-                const asn_class: ASN1.TagClass = switch (asn_class_raw) {
-                    0b00 => .Universal,
-                    0b01 => .Application,
-                    0b10 => .ContextSpecific,
-                    0b11 => .Private,
+                var cert = std.crypto.Certificate{
+                    .buffer = x509,
+                    .index = 0,
                 };
-                const asn_id_raw = @truncate(u5, asn_type_raw & 0b0001_1111);
-                if (asn_id_raw == 0b1_1111) {
-                    // TODO: long form
-                    return error.LongFormASN1Tag;
-                }
-                const asn_id = @intToEnum(ASN1.TagID, asn_id_raw);
-                const asn_is_constructed = asn_type_raw & 0b0010_0000 != 0;
-                const length_byte1 = x509[1];
-                var length: u1024 = undefined;
-                if (length_byte1 & 0b1000_0000 != 0) {
-                    const int_length = length_byte1 & 0b0111_1111;
-                    length = std.mem.readVarInt(u1024, x509[2..][0..int_length], .Little);
-                    try stdout.writer().print("Int length byte: {b}, int length: {}, value: {}\n", .{ length_byte1, int_length, length });
-                } else {
-                    length = length_byte1;
-                }
-
-                try stdout.writer().print("ASN {s} {s} {s}\n", .{ @tagName(asn_class), if (asn_is_constructed) "Constructed" else "Primitive", @tagName(asn_id) });
-
-                std.debug.assert(length == 160);
-
-                std.debug.assert(x509[0] == 0x30);
-                std.debug.assert(x509[1] == 0x81);
-                std.debug.assert(x509[2] == 0xA0);
-
-                // const der_file = try dir.createFile("x509.der", .{});
-                // try der_file.writeAll(buf[0..x509_length]);
-                // der_file.close();
-                // try stream_source.seekBy(x509_length);
+                var parsed = try cert.parse();
+                _ = parsed;
             }
 
             const attribute_list_length = try stream_source.reader().readInt(u32, .Little);
