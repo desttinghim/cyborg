@@ -1,78 +1,102 @@
 //! This file implements signing and verification of Android APKs as described at the
 //! [Android Source APK Signature Scheme v2 page (as of 2023-04-16)][https://source.android.com/docs/security/features/apksigning/v2]
 
-const SigningEntry = struct {
-    length: u64,
-    id: u32,
-    value: union {},
-};
-
 const SigningBlock = struct {
+    stream_source: std.io.StreamSource,
+    buffer: []const u8,
     size_of_block: u64,
     entries: []SigningEntry,
     // size_of_block repeated
     magic: [16]u8 = "APK Sig Block 42",
 };
 
-const SignatureAlgorithm = enum(u32) {
-    /// RSASSA-PSS with SHA2-256 digest, SHA2-256 MGF1, 32 bytes of salt, trailer: 0xbc
-    RSASSA_PSS_256 = 0x0101,
-    /// RSASSA-PSS with SHA2-512 digest, SHA2-512 MGF1, 64 bytes of salt, trailer: 0xbc
-    RSASSA_PSS_512 = 0x0102,
-    /// RSASSA-PKCS1-v1_5 with SHA2-256 digest. This is for build systems which require deterministic signatures.
-    RSASSA_PKCS1_v1_5_256 = 0x0103,
-    /// RSASSA-PKCS1-v1_5 with SHA2-512 digest. This is for build systems which require deterministic signatures.
-    RSASSA_PKCS1_v1_5_512 = 0x0104,
-    /// ECDSA with SHA2-256 digest
-    ECDSA_256 = 0x0201,
-    /// ECDSA with SHA2-512 digest
-    ECDSA_512 = 0x0202,
-    /// DSA with SHA2-256 digest
-    DSA_256 = 0x0301,
+pub const SigningEntry = union(Tag) {
+    V2: []Signer,
+
+    pub const Tag = enum(u32) {
+        V2 = 0x7109871a,
+    };
+
+    pub const Signer = struct {
+        signed_data: []SignedData,
+        signatures: []Signature,
+        public_key: std.crypto.Certificate,
+
+        pub const SignedData = struct {
+            digests: [][]const u8,
+            certificates: std.crypto.Certificate,
+            attributes: []Attribute,
+
+            const digest_magic = 0x5a;
+            const Attribute = struct {};
+        };
+
+        pub const Signature = struct {
+            algorithm: std.crypto.Certificate.Algorithm,
+            signature: []const u8,
+        };
+    };
 };
 
-const Digest = struct {
-    const magic = 0x5a;
-
-    chunk_count: u32,
-};
-const Attribute = struct {};
-
-const SignedData = struct {
-    digests: [][]Digest,
-    certificates: std.crypto.Certificate.der,
-    attributes: []Attribute,
-};
-
-const Signature = struct {
-    algorithm: SignatureAlgorithm,
-    signature: []const u8,
-};
-
-const Signer = struct {
-    signed_data: []SignedData,
-    signatures: []Signature,
-    public_key: std.crypto.Certificate.der,
-};
-
-/// Stored inside SigningBlock
-const SignatureSchemeBlock = struct {
-    const ID = 0x7109871a;
-    signers: []Signer,
+const Sections = struct {
+    stream_source: *std.io.StreamSource,
+    contents_index: u64,
+    signing_block_index: u64,
+    central_directory_index: u64,
+    end_of_central_directory_index: u64,
 };
 
 /// Intermediate data structure for signing/verifying an APK. Each section is split into chunks.
 /// Each chunk is 1MB, unless it is the final chunk in a section, in which case it may be smaller.
 const Chunks = struct {
-    const magic = 0xa5;
+    sections: *Sections,
+    chunks: []Slice,
 
-    contents: [][]const u8,
-    central_directory: [][]const u8,
-    end_central_direcotry: [][]const u8,
+    const magic = 0xa5;
+    const Slice = struct {
+        start: u64,
+        end: u64,
+    };
 };
 
 /// Splits an APK into chunks for signing/verifying.
-fn splitAPK() Chunks {}
+fn splitAPK(alloc: std.mem.Allocator, file: std.fs.File) Chunks {
+    var stream_source = std.io.StreamSource{ .file = file };
+
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
+    try archive_reader.load();
+
+    // Verify that the magic bytes are present
+
+    const magic_byte_offset = archive_reader.directory_offset - 16;
+    {
+        var buf: [16]u8 = undefined;
+
+        try stream_source.seekTo(magic_byte_offset);
+
+        std.debug.assert(try stream_source.read(&buf) == 16);
+
+        if (!std.mem.eql(u8, &buf, "APK Sig Block 42")) return error.MissingSigningBlock;
+    }
+
+    // Get the block size
+
+    const block_size_offset = magic_byte_offset - 8;
+
+    try stream_source.seekTo(block_size_offset);
+
+    const block_size = try stream_source.reader().readInt(u64, .Little);
+
+    const block_start = archive_reader.directory_offset - block_size;
+
+    const block_size_offset_2 = block_start - 8;
+
+    try stream_source.seekTo(block_size_offset_2);
+
+    const block_size_2 = try stream_source.reader().readInt(u64, .Little);
+
+    if (block_size != block_size_2) return error.BlockSizeMismatch;
+}
 
 /// Verifies that a signed APK is valid.
 /// [The following description of the algorithm is copied from the Android Source documentation.][https://source.android.com/docs/security/features/apksigning/v2#v2-verification]
@@ -95,6 +119,58 @@ fn splitAPK() Chunks {}
 ///    f. Verify that `SubjectPublicKeyInfo` of the first `certificate` of `certificates` is identical to `public key`.
 /// 4. Verification succeeds if at least one `signer` was found and step 3 succeeded for each found `signer`.
 pub fn verify() void {}
+
+pub const OffsetSlice = struct { start: u64, end: u64 };
+
+pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, archive_reader: archive.formats.zip.reader.ArchiveReader) !std.AutoArrayHashMap(u32, OffsetSlice) {
+    // Verify that the magic bytes are present
+    const magic_byte_offset = archive_reader.directory_offset - 16;
+    {
+        var buf: [16]u8 = undefined;
+
+        try stream_source.seekTo(magic_byte_offset);
+
+        std.debug.assert(try stream_source.read(&buf) == 16);
+
+        if (!std.mem.eql(u8, &buf, "APK Sig Block 42")) return error.MissingSigningBlock;
+    }
+
+    // Get the block size
+
+    const block_size_offset = magic_byte_offset - 8;
+
+    try stream_source.seekTo(block_size_offset);
+
+    const block_size = try stream_source.reader().readInt(u64, .Little);
+
+    const block_start = archive_reader.directory_offset - block_size;
+
+    const block_size_offset_2 = block_start - 8;
+
+    try stream_source.seekTo(block_size_offset_2);
+
+    const block_size_2 = try stream_source.reader().readInt(u64, .Little);
+
+    if (block_size != block_size_2) return error.BlockSizeMismatch;
+
+    // Create the hashmap and add all the signing blocks to it
+
+    var id_value_pairs = std.AutoArrayHashMap(u32, OffsetSlice).init(alloc);
+    errdefer id_value_pairs.deinit();
+
+    while (try stream_source.getPos() < block_size_offset) {
+        const size = try stream_source.reader().readInt(u64, .Little);
+        const pos = try stream_source.getPos();
+        if (pos + size > try stream_source.getEndPos()) return error.LengthTooLarge;
+        const id = try stream_source.reader().readInt(u32, .Little);
+
+        try id_value_pairs.put(id, .{ .start = pos, .end = pos + size });
+
+        try stream_source.seekBy(@intCast(i64, size - 4));
+    }
+
+    return id_value_pairs;
+}
 
 // Imports
 const std = @import("std");

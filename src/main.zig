@@ -248,82 +248,38 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
     try archive_reader.load();
 
-    // Verify that the magic bytes are present
+    var id_value_pairs = try signing.get_signing_blocks(alloc, &stream_source, archive_reader);
 
-    const magic_byte_offset = archive_reader.directory_offset - 16;
     {
-        var buf: [16]u8 = undefined;
-
-        try stream_source.seekTo(magic_byte_offset);
-
-        std.debug.assert(try stream_source.read(&buf) == 16);
-
-        if (!std.mem.eql(u8, &buf, "APK Sig Block 42")) return error.MissingSigningBlock;
-    }
-
-    // Get the block size
-
-    const block_size_offset = magic_byte_offset - 8;
-
-    try stream_source.seekTo(block_size_offset);
-
-    const block_size = try stream_source.reader().readInt(u64, .Little);
-
-    const block_start = archive_reader.directory_offset - block_size;
-
-    try stdout.writer().print("Signing block starts at {} and contains {} bytes\n", .{ block_start, block_size });
-
-    const block_size_offset_2 = block_start - 8;
-
-    try stream_source.seekTo(block_size_offset_2);
-
-    const block_size_2 = try stream_source.reader().readInt(u64, .Little);
-
-    if (block_size != block_size_2) {
-        try stdout.writer().print("First and second block size mismatch! {} != {}\n", .{ block_size, block_size_2 });
-        return error.BlockSizeMismatch;
-    }
-
-    const OffsetSlice = struct { u64, u64 };
-
-    var id_value_pairs = std.AutoArrayHashMap(u32, OffsetSlice).init(alloc);
-    defer id_value_pairs.deinit();
-
-    // var id_value_arena = std.heap.ArenaAllocator.init(alloc);
-    // defer id_value_arena.deinit();
-    // const id_value_alloc = id_value_arena.allocator();
-
-    while (try stream_source.getPos() < block_size_offset) {
-        const size = try stream_source.reader().readInt(u64, .Little);
-        const id = try stream_source.reader().readInt(u32, .Little);
-        // const bytes = try id_value_alloc.alloc(u8, size - 4); // -4 to account for id
-        // std.debug.assert(try stream_source.read(bytes) == size - 4);
-
-        try id_value_pairs.put(id, .{ try stream_source.getPos(), size });
+        var iter = id_value_pairs.iterator();
+        try stdout.writer().print("\nSigning Blocks\n{s:<12}{s:<12}{s:<12}{s:<12}\n", .{ "ID", "Start", "End", "Length" });
+        while (iter.next()) |id_value| {
+            const start = id_value.value_ptr.start;
+            const end = id_value.value_ptr.end;
+            try stdout.writer().print("0x{X:<10}0x{X:<10}0x{X:<10}{:<10}\n", .{ id_value.key_ptr.*, start, end, end - start });
+        }
+        try stdout.writer().print("\n", .{});
     }
 
     const v2_block = id_value_pairs.get(0x7109871a) orelse return error.MissingV2;
-    const v2_offset = v2_block.@"0";
-    const v2_size = v2_block.@"1";
-    _ = v2_size;
-    try stream_source.seekTo(v2_offset);
+    try stream_source.seekTo(v2_block.start);
     const signer_length = try stream_source.reader().readInt(u32, .Little);
     const signer_pos = try stream_source.getPos();
-    while (try stream_source.getPos() < signer_pos + signer_length - 4) {
+    try stdout.writer().print("Signer\t\t{}\tlength {}\n", .{ signer_pos, signer_length });
+    while (try stream_source.getPos() < signer_pos + signer_length) {
         const signed_data_length = try stream_source.reader().readInt(u32, .Little);
         const signed_data_pos = try stream_source.getPos();
-        _ = signed_data_pos;
-        try stdout.writer().print("Signer of length {}\n", .{signed_data_length});
+        try stdout.writer().print("signed data\t{}\tlength {}\n", .{ signed_data_pos, signed_data_length });
 
         // Signed Data
-        // while (try stream_source.getPos() < signed_data_pos + signed_data_length) {
-        {
+        while (try stream_source.getPos() < signed_data_pos + signed_data_length) {
             const digest_chunks_total_length = try stream_source.reader().readInt(u32, .Little);
-            try stdout.writer().print("Total length of digest chunks: {}\n", .{digest_chunks_total_length});
-            const digest_chunks_length = try stream_source.reader().readInt(u32, .Little);
-            const digest_chunks_pos = try stream_source.getPos();
-            try stdout.writer().print("Digest chunk of length {}\n", .{digest_chunks_length});
-            while (try stream_source.getPos() < digest_chunks_pos + digest_chunks_length) {
+            const digest_chunks_total_pos = try stream_source.getPos();
+            try stdout.writer().print("Digest Chunks\t{}\tlength {}\n", .{ digest_chunks_total_pos, digest_chunks_total_length });
+            // const digest_chunks_length = try stream_source.reader().readInt(u32, .Little);
+            // const digest_chunks_pos = try stream_source.getPos();
+            // try stdout.writer().print("Digest chunk of length {}; pos {}\n", .{ digest_chunks_length, digest_chunks_pos });
+            while (try stream_source.getPos() < digest_chunks_total_pos + digest_chunks_total_length) {
                 const digest_chunk_length = try stream_source.reader().readInt(u32, .Little);
                 const digest_chunk_pos = try stream_source.getPos();
                 const signature_algorithm_id = try stream_source.reader().readInt(u32, .Little);
@@ -380,9 +336,8 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
         // Public Key
         const public_key_length = try stream_source.reader().readInt(u32, .Little);
         const public_key_pos = try stream_source.getPos();
-        _ = public_key_pos;
         try stdout.writer().print("Public key block of length {}\n", .{public_key_length});
-        try stream_source.seekBy(public_key_length - 4);
+        try stream_source.seekBy(@intCast(i64, public_key_pos + public_key_length));
     }
 
     try stdout.writer().print("End of signing block\n", .{});
