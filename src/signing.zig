@@ -160,11 +160,11 @@ pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.Strea
 
     while (try stream_source.getPos() < block_size_offset) {
         const size = try stream_source.reader().readInt(u64, .Little);
-        const pos = try stream_source.getPos();
-        if (pos + size > try stream_source.getEndPos()) return error.LengthTooLarge;
         const id = try stream_source.reader().readInt(u32, .Little);
+        const pos = try stream_source.getPos();
+        if (pos + size - 4 > try stream_source.getEndPos()) return error.LengthTooLarge;
 
-        try id_value_pairs.put(id, .{ .start = pos, .end = pos + size });
+        try id_value_pairs.put(id, .{ .start = pos, .end = pos + size - 4 });
 
         try stream_source.seekBy(@intCast(i64, size - 4));
     }
