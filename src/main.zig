@@ -248,20 +248,26 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
     try archive_reader.load();
 
-    var id_value_pairs = try signing.get_signing_blocks(alloc, &stream_source, archive_reader);
+    var id_value_pairs = try signing.get_signing_blocks(alloc, &stream_source, archive_reader.directory_offset);
 
     {
         var iter = id_value_pairs.iterator();
         try stdout.writer().print("\nSigning Blocks\n{s:<12}{s:<12}{s:<12}{s:<12}\n", .{ "ID", "Start", "End", "Length" });
+        try stdout.writer().print("{s:-<11} {s:-<11} {s:-<11} {s:-<11}\n", .{ "", "", "", "" });
         while (iter.next()) |id_value| {
             const start = id_value.value_ptr.start;
             const end = id_value.value_ptr.end;
-            try stdout.writer().print("0x{X:<10}0x{X:<10}0x{X:<10}{:<10}\n", .{ id_value.key_ptr.*, start, end, end - start });
+            var buf: [64]u8 = undefined;
+            const name = switch (id_value.key_ptr.*) {
+                inline .V2 => |tag| @tagName(tag),
+                _ => |value| try std.fmt.bufPrint(&buf, "0x{X}", .{@enumToInt(value)}),
+            };
+            try stdout.writer().print("{s:<12}0x{X:<10}0x{X:<10}{:<10}\n", .{ name, start, end, end - start });
         }
         try stdout.writer().print("\n", .{});
     }
 
-    const v2_block = id_value_pairs.get(0x7109871a) orelse return error.MissingV2;
+    const v2_block = id_value_pairs.get(signing.SigningEntry.Tag.V2) orelse return error.MissingV2;
     try stream_source.seekTo(v2_block.start);
     const signer_list_length = try stream_source.reader().readInt(u32, .Little);
     const signer_list_pos = try stream_source.getPos();
@@ -284,8 +290,9 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
             const digest_chunk_pos = try stream_source.getPos();
             _ = digest_chunk_pos;
             const digest_chunk_length = try stream_source.reader().readInt(u32, .Little);
+            _ = digest_chunk_length;
             const signature_algorithm_id = try stream_source.reader().readInt(u32, .Little);
-            try stdout.writer().print("Digest Alg\t0x{X}\tlength {}\n", .{ signature_algorithm_id, digest_chunk_length });
+            try stdout.writer().print("Digest Alg\t0x{X}\n", .{signature_algorithm_id});
 
             while (try stream_source.getPos() < digest_chunks_pos + digest_chunks_length) {
                 const digest_pos = try stream_source.getPos();
@@ -296,18 +303,18 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
                     else => return error.InvalidSignatureAlgorithm,
                 }
                 try stream_source.seekBy(digest_length);
-                // try stream_source.seekTo(digest_pos + digest_length);
             }
 
             const x509_list_pos = try stream_source.getPos();
             const x509_list_length = try stream_source.reader().readInt(u32, .Little);
             while (try stream_source.getPos() < x509_list_pos + x509_list_length) {
+                const x509_pos = try stream_source.getPos();
                 const x509_length = try stream_source.reader().readInt(u32, .Little);
-                try stdout.writer().print("x509 Certificate of length {}\n", .{x509_length});
+                try stdout.writer().print("x509 Cert\t{X}\tlength {}\n", .{ x509_pos, x509_length });
                 var buf: [1024]u8 = undefined;
                 std.debug.assert(x509_length == try stream_source.reader().read(buf[0..x509_length]));
-                const hex = std.fmt.fmtSliceHexUpper(buf[0..x509_length]);
-                try stdout.writer().print("{s}\n", .{hex});
+                // const hex = std.fmt.fmtSliceHexUpper(buf[0..x509_length]);
+                // try stdout.writer().print("{s}\n", .{hex});
 
                 const x509 = buf[0..x509_length];
 
@@ -319,12 +326,14 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
                 _ = parsed;
             }
 
-            const attribute_list_length = try stream_source.reader().readInt(u32, .Little);
             const attribute_list_pos = try stream_source.getPos();
+            const attribute_list_length = try stream_source.reader().readInt(u32, .Little);
+            try stdout.writer().print("Attribute List\t{X}\tlength {}\n", .{ attribute_list_pos, attribute_list_length });
             while (try stream_source.getPos() < attribute_list_pos + attribute_list_length) {
+                const attribute_pos = try stream_source.getPos();
                 const attribute_length = try stream_source.reader().readInt(u32, .Little);
                 const attribute_id = try stream_source.reader().readInt(u32, .Little);
-                try stdout.writer().print("Attribute length {}; id: {}\n", .{ attribute_length, attribute_id });
+                try stdout.writer().print("Attribute {}\t{X}\tlength {}\n", .{ attribute_id, attribute_pos, attribute_length });
                 try stream_source.seekBy(attribute_length - 4);
             }
         }
@@ -332,7 +341,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
         // Signatures
         const signatures_length = try stream_source.reader().readInt(u32, .Little);
         const signatures_pos = try stream_source.getPos();
-        try stdout.writer().print("Signatures block of length {}\n", .{signatures_length});
+        try stdout.writer().print("Signatures\t{}\tlength {}\n", .{ signatures_pos, signatures_length });
         while (try stream_source.getPos() < signatures_pos + signatures_length) {
             const signature_length = try stream_source.reader().readInt(u32, .Little);
             const signature_pos = try stream_source.getPos();
@@ -347,7 +356,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
         // Public Key
         const public_key_length = try stream_source.reader().readInt(u32, .Little);
         const public_key_pos = try stream_source.getPos();
-        try stdout.writer().print("Public key block of length {}\n", .{public_key_length});
+        try stdout.writer().print("Public Key\t{}\tlength {}\n", .{ public_key_pos, public_key_length });
         try stream_source.seekBy(@intCast(i64, public_key_pos + public_key_length));
     }
 

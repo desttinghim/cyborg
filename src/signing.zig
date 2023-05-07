@@ -15,6 +15,7 @@ pub const SigningEntry = union(Tag) {
 
     pub const Tag = enum(u32) {
         V2 = 0x7109871a,
+        _,
     };
 
     pub const Signer = struct {
@@ -122,9 +123,9 @@ pub fn verify() void {}
 
 pub const OffsetSlice = struct { start: u64, end: u64 };
 
-pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, archive_reader: archive.formats.zip.reader.ArchiveReader) !std.AutoArrayHashMap(u32, OffsetSlice) {
+pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, directory_offset: u64) !std.AutoArrayHashMap(SigningEntry.Tag, OffsetSlice) {
     // Verify that the magic bytes are present
-    const magic_byte_offset = archive_reader.directory_offset - 16;
+    const magic_byte_offset = directory_offset - 16;
     {
         var buf: [16]u8 = undefined;
 
@@ -143,7 +144,7 @@ pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.Strea
 
     const block_size = try stream_source.reader().readInt(u64, .Little);
 
-    const block_start = archive_reader.directory_offset - block_size;
+    const block_start = directory_offset - block_size;
 
     const block_size_offset_2 = block_start - 8;
 
@@ -155,12 +156,12 @@ pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.Strea
 
     // Create the hashmap and add all the signing blocks to it
 
-    var id_value_pairs = std.AutoArrayHashMap(u32, OffsetSlice).init(alloc);
+    var id_value_pairs = std.AutoArrayHashMap(SigningEntry.Tag, OffsetSlice).init(alloc);
     errdefer id_value_pairs.deinit();
 
     while (try stream_source.getPos() < block_size_offset) {
         const size = try stream_source.reader().readInt(u64, .Little);
-        const id = try stream_source.reader().readInt(u32, .Little);
+        const id = @intToEnum(SigningEntry.Tag, try stream_source.reader().readInt(u32, .Little));
         const pos = try stream_source.getPos();
         if (pos + size - 4 > try stream_source.getEndPos()) return error.LengthTooLarge;
 
