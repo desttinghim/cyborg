@@ -263,33 +263,44 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
 
     const v2_block = id_value_pairs.get(0x7109871a) orelse return error.MissingV2;
     try stream_source.seekTo(v2_block.start);
-    const signer_length = try stream_source.reader().readInt(u32, .Little);
-    const signer_pos = try stream_source.getPos();
-    try stdout.writer().print("Signer\t\t{}\tlength {}\n", .{ signer_pos, signer_length });
-    while (try stream_source.getPos() < signer_pos + signer_length) {
-        const signed_data_length = try stream_source.reader().readInt(u32, .Little);
+    const signer_list_length = try stream_source.reader().readInt(u32, .Little);
+    const signer_list_pos = try stream_source.getPos();
+    try stdout.writer().print("Signer List\t{X}\tlength {}\n", .{ signer_list_pos, signer_list_length });
+    while (try stream_source.getPos() < signer_list_pos + signer_list_length) {
+        const signer_length = try stream_source.reader().readInt(u32, .Little);
+        const signer_pos = try stream_source.getPos();
+        try stdout.writer().print("Signer\t\t{X}\tlength {}\n", .{ signer_pos, signer_length });
+
         const signed_data_pos = try stream_source.getPos();
-        try stdout.writer().print("signed data\t{}\tlength {}\n", .{ signed_data_pos, signed_data_length });
+        const signed_data_length = try stream_source.reader().readInt(u32, .Little);
+        try stdout.writer().print("Signed Data\t{X}\tlength {}\n", .{ signed_data_pos, signed_data_length });
 
         // Signed Data
         while (try stream_source.getPos() < signed_data_pos + signed_data_length) {
-            const digest_chunks_total_length = try stream_source.reader().readInt(u32, .Little);
-            const digest_chunks_total_pos = try stream_source.getPos();
-            try stdout.writer().print("Digest Chunks\t{}\tlength {}\n", .{ digest_chunks_total_pos, digest_chunks_total_length });
-            // const digest_chunks_length = try stream_source.reader().readInt(u32, .Little);
-            // const digest_chunks_pos = try stream_source.getPos();
-            // try stdout.writer().print("Digest chunk of length {}; pos {}\n", .{ digest_chunks_length, digest_chunks_pos });
-            while (try stream_source.getPos() < digest_chunks_total_pos + digest_chunks_total_length) {
-                const digest_chunk_length = try stream_source.reader().readInt(u32, .Little);
-                const digest_chunk_pos = try stream_source.getPos();
-                const signature_algorithm_id = try stream_source.reader().readInt(u32, .Little);
+            const digest_chunks_length = try stream_source.reader().readInt(u32, .Little);
+            const digest_chunks_pos = try stream_source.getPos();
+            try stdout.writer().print("Digest Chunk\t{X}\tlength {}\n", .{ digest_chunks_pos, digest_chunks_length });
+
+            const digest_chunk_pos = try stream_source.getPos();
+            _ = digest_chunk_pos;
+            const digest_chunk_length = try stream_source.reader().readInt(u32, .Little);
+            const signature_algorithm_id = try stream_source.reader().readInt(u32, .Little);
+            try stdout.writer().print("Digest Alg\t0x{X}\tlength {}\n", .{ signature_algorithm_id, digest_chunk_length });
+
+            while (try stream_source.getPos() < digest_chunks_pos + digest_chunks_length) {
+                const digest_pos = try stream_source.getPos();
                 const digest_length = try stream_source.reader().readInt(u32, .Little);
-                try stdout.writer().print("Digest signature algorithm id {x}; length {}\n", .{ signature_algorithm_id, digest_length });
-                try stream_source.seekTo(digest_chunk_pos + digest_chunk_length);
+                try stdout.writer().print("Digest\t\t{X}\tlength {}\n", .{ digest_pos, digest_length });
+                switch (signature_algorithm_id) {
+                    0x101, 0x102, 0x103, 0x104, 0x201, 0x202, 0x301 => {},
+                    else => return error.InvalidSignatureAlgorithm,
+                }
+                try stream_source.seekBy(digest_length);
+                // try stream_source.seekTo(digest_pos + digest_length);
             }
 
-            const x509_list_length = try stream_source.reader().readInt(u32, .Little);
             const x509_list_pos = try stream_source.getPos();
+            const x509_list_length = try stream_source.reader().readInt(u32, .Little);
             while (try stream_source.getPos() < x509_list_pos + x509_list_length) {
                 const x509_length = try stream_source.reader().readInt(u32, .Little);
                 try stdout.writer().print("x509 Certificate of length {}\n", .{x509_length});
