@@ -11,7 +11,18 @@ const SigningBlock = struct {
 };
 
 pub const SigningEntry = union(Tag) {
-    V2: []Signer,
+    V2: std.ArrayList(Signer),
+
+    pub fn deinit(entry: *SigningEntry) void {
+        switch (entry) {
+            inline else => |list| {
+                for (list.items) |item| {
+                    item.deinit();
+                }
+                list.deinit();
+            },
+        }
+    }
 
     pub const Tag = enum(u32) {
         V2 = 0x7109871a,
@@ -19,14 +30,40 @@ pub const SigningEntry = union(Tag) {
     };
 
     pub const Signer = struct {
-        signed_data: []SignedData,
-        signatures: []Signature,
-        public_key: std.crypto.Certificate,
+        alloc: std.mem.Allocator,
+        signed_data: std.ArrayListUnmanaged(SignedData),
+        signatures: std.ArrayListUnmanaged(Signature),
+        public_key: std.crypto.Certificate.Parsed,
+
+        pub fn deinit(signer: *Signer) void {
+            for (signer.signed_data.items) |signed_data| {
+                signed_data.deinit();
+            }
+            for (signer.signatures.items) |signature| {
+                signature.deinit();
+            }
+            signer.signed_data.clearAndFree();
+            signer.signatures.clearAndFree();
+            signer.alloc.free(signer.public_key.certificate.buffer);
+        }
 
         pub const SignedData = struct {
-            digests: [][]const u8,
-            certificates: std.crypto.Certificate,
-            attributes: []Attribute,
+            alloc: std.mem.Allocator,
+            digests: std.ArrayListUnmanaged([]const u8),
+            certificates: std.ArrayListUnmanaged(std.crypto.Certificate.Parsed),
+            attributes: std.ArrayListUnmanaged(Attribute),
+
+            pub fn deinit(signed_data: *SignedData) void {
+                for (signed_data.digests.items) |digest| {
+                    signed_data.alloc.free(digest);
+                }
+                for (signed_data.certificates.items) |certificate| {
+                    signed_data.alloc.free(certificate.certificate.Certificate);
+                }
+                signed_data.digests.clearAndFree(signed_data.alloc);
+                signed_data.certificates.clearAndFree(signed_data.alloc);
+                signed_data.attributes.clearAndFree(signed_data.alloc);
+            }
 
             const digest_magic = 0x5a;
             const Attribute = struct {};
@@ -35,6 +72,10 @@ pub const SigningEntry = union(Tag) {
         pub const Signature = struct {
             algorithm: std.crypto.Certificate.Algorithm,
             signature: []const u8,
+
+            pub fn deinit(signature: *Signature) void {
+                signature.alloc.free(signature.signature);
+            }
         };
     };
 };
@@ -171,6 +212,144 @@ pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.Strea
     }
 
     return id_value_pairs;
+}
+
+pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, stream_slice: OffsetSlice) !SigningEntry {
+    try stream_source.seekTo(stream_slice.start);
+
+    var signers = std.ArrayList(SigningEntry.Signer).init(alloc);
+    errdefer signers.deinit();
+
+    const signer_list_length = try stream_source.reader().readInt(u32, .Little);
+    const signer_list_pos = try stream_source.getPos();
+    while (try stream_source.getPos() < signer_list_pos + signer_list_length) {
+        var signed_data = std.ArrayListUnmanaged(SigningEntry.Signer.SignedData){};
+        errdefer signed_data.clearAndFree(alloc);
+
+        const signer_length = try stream_source.reader().readInt(u32, .Little);
+        _ = signer_length;
+        const signer_pos = try stream_source.getPos();
+        _ = signer_pos;
+
+        const signed_data_pos = try stream_source.getPos();
+        const signed_data_length = try stream_source.reader().readInt(u32, .Little);
+
+        // Signed Data
+        while (try stream_source.getPos() < signed_data_pos + signed_data_length) {
+            var digests = std.ArrayListUnmanaged([]const u8){};
+            errdefer {
+                for (digests.items) |digest| {
+                    alloc.free(digest);
+                }
+                digests.clearAndFree(alloc);
+            }
+
+            const digest_chunks_length = try stream_source.reader().readInt(u32, .Little);
+            const digest_chunks_pos = try stream_source.getPos();
+
+            const digest_chunk_pos = try stream_source.getPos();
+            _ = digest_chunk_pos;
+            const digest_chunk_length = try stream_source.reader().readInt(u32, .Little);
+            _ = digest_chunk_length;
+            const signature_algorithm_id = try stream_source.reader().readInt(u32, .Little);
+
+            while (try stream_source.getPos() < digest_chunks_pos + digest_chunks_length) {
+                const digest_pos = try stream_source.getPos();
+                _ = digest_pos;
+                const digest_length = try stream_source.reader().readInt(u32, .Little);
+                switch (signature_algorithm_id) {
+                    0x101, 0x102, 0x103, 0x104, 0x201, 0x202, 0x301 => {},
+                    else => return error.InvalidSignatureAlgorithm,
+                }
+                const digest = try alloc.alloc(u8, digest_length);
+                try digests.append(alloc, digest);
+                try stream_source.seekBy(digest_length);
+            }
+
+            var x509_list = std.ArrayListUnmanaged(std.crypto.Certificate.Parsed){};
+            errdefer x509_list.clearAndFree(alloc);
+
+            const x509_list_pos = try stream_source.getPos();
+            const x509_list_length = try stream_source.reader().readInt(u32, .Little);
+            while (try stream_source.getPos() < x509_list_pos + x509_list_length) {
+                const x509_pos = try stream_source.getPos();
+                _ = x509_pos;
+                const x509_length = try stream_source.reader().readInt(u32, .Little);
+                var buf: [1024]u8 = undefined;
+                std.debug.assert(x509_length == try stream_source.reader().read(buf[0..x509_length]));
+
+                const x509 = buf[0..x509_length];
+
+                var cert = std.crypto.Certificate{
+                    .buffer = x509,
+                    .index = 0,
+                };
+                var parsed = try cert.parse();
+
+                try x509_list.append(alloc, parsed);
+            }
+
+            var attributes = std.ArrayListUnmanaged(SigningEntry.Signer.SignedData.Attribute){};
+            // errdefer attributes.clearAndFree(alloc);
+
+            const attribute_list_pos = try stream_source.getPos();
+            const attribute_list_length = try stream_source.reader().readInt(u32, .Little);
+            while (try stream_source.getPos() < attribute_list_pos + attribute_list_length) {
+                const attribute_pos = try stream_source.getPos();
+                _ = attribute_pos;
+                const attribute_length = try stream_source.reader().readInt(u32, .Little);
+                const attribute_id = try stream_source.reader().readInt(u32, .Little);
+                _ = attribute_id;
+                try stream_source.seekBy(attribute_length - 4);
+            }
+
+            try signed_data.append(alloc, .{
+                .alloc = alloc,
+                .digests = digests,
+                .certificates = x509_list,
+                .attributes = attributes,
+            });
+        }
+
+        var signatures = std.ArrayListUnmanaged(SigningEntry.Signer.Signature){};
+        errdefer signatures.deinit(alloc);
+
+        // Signatures
+        const signatures_length = try stream_source.reader().readInt(u32, .Little);
+        const signatures_pos = try stream_source.getPos();
+        while (try stream_source.getPos() < signatures_pos + signatures_length) {
+            const signature_length = try stream_source.reader().readInt(u32, .Little);
+            const signature_pos = try stream_source.getPos();
+            _ = signature_pos;
+            const signature_algorithm_id = try stream_source.reader().readInt(u32, .Little);
+            _ = signature_algorithm_id;
+            const signature_over_data_length = try stream_source.reader().readInt(u32, .Little);
+            _ = signature_over_data_length;
+            try stream_source.seekBy(signature_length - 8);
+        }
+
+        // Public Key
+        const public_key_length = try stream_source.reader().readInt(u32, .Little);
+        const public_key_pos = try stream_source.getPos();
+        _ = public_key_pos;
+        const public_key_buffer = try alloc.alloc(u8, public_key_length);
+        std.debug.assert(try stream_source.read(public_key_buffer) == public_key_length);
+        const public_key_cert = std.crypto.Certificate{
+            .buffer = public_key_buffer,
+            .index = 0,
+        };
+        const public_key = try public_key_cert.parse();
+        // try stream_source.seekBy(@intCast(i64, public_key_pos + public_key_length));
+
+        try signers.append(.{
+            .alloc = alloc,
+            .signed_data = signed_data,
+            .signatures = signatures,
+            .public_key = public_key,
+        });
+    }
+
+    return SigningEntry{ .V2 = signers };
 }
 
 // Imports

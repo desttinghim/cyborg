@@ -25,17 +25,6 @@ pub fn build(b: *std.Build) !void {
     });
     _ = cyborg_module;
 
-    const lib = b.addStaticLibrary(.{
-        .name = "cyborg",
-        .root_source_file = .{ .path = "src/main.zig" },
-        .target = target,
-        .optimize = optimize,
-    });
-    lib.addModule("archive", archive_mod);
-    xml.link(lib);
-
-    b.installArtifact(lib);
-
     const main_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/main.zig" },
         .target = target,
