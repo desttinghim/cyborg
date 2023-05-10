@@ -252,17 +252,17 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
 
     {
         var iter = id_value_pairs.iterator();
-        try stdout.writer().print("\nSigning Blocks\n{s:<12}{s:<12}{s:<12}{s:<12}\n", .{ "ID", "Start", "End", "Length" });
-        try stdout.writer().print("{s:-<11} {s:-<11} {s:-<11} {s:-<11}\n", .{ "", "", "", "" });
+        try stdout.writer().print("\nSigning Blocks\n{s:<16}{s:<12}{s:<12}{s:<12}\n", .{ "ID", "Start", "End", "Length" });
+        try stdout.writer().print("{s:-<15} {s:-<11} {s:-<11} {s:-<11}\n", .{ "", "", "", "" });
         while (iter.next()) |id_value| {
             const start = id_value.value_ptr.start;
             const end = id_value.value_ptr.end;
             var buf: [64]u8 = undefined;
             const name = switch (id_value.key_ptr.*) {
-                inline .V2 => |tag| @tagName(tag),
+                inline .V2 => |tag| try std.fmt.bufPrint(&buf, "0x{X} ({s})", .{ @enumToInt(tag), @tagName(tag) }),
                 _ => |value| try std.fmt.bufPrint(&buf, "0x{X}", .{@enumToInt(value)}),
             };
-            try stdout.writer().print("{s:<12}0x{X:<10}0x{X:<10}{:<10}\n", .{ name, start, end, end - start });
+            try stdout.writer().print("{s:<16}0x{X:<10}0x{X:<10}{:<10}\n", .{ name, start, end, end - start });
         }
         try stdout.writer().print("\n", .{});
     }
