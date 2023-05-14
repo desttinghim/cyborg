@@ -255,8 +255,8 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
         try stdout.writer().print("\nSigning Blocks\n{s:<16}{s:<12}{s:<12}{s:<12}\n", .{ "ID", "Start", "End", "Length" });
         try stdout.writer().print("{s:-<15} {s:-<11} {s:-<11} {s:-<11}\n", .{ "", "", "", "" });
         while (iter.next()) |id_value| {
-            const start = id_value.value_ptr.start;
-            const end = id_value.value_ptr.end;
+            const start = id_value.value_ptr.position;
+            const end = start + id_value.value_ptr.slice.len;
             var buf: [64]u8 = undefined;
             const name = switch (id_value.key_ptr.*) {
                 inline .V2 => |tag| try std.fmt.bufPrint(&buf, "0x{X} ({s})", .{ @enumToInt(tag), @tagName(tag) }),
