@@ -270,7 +270,32 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     const v2_block = id_value_pairs.get(signing.SigningEntry.Tag.V2) orelse return error.MissingV2;
 
     const signing_entry = try signing.parse_v2(alloc, &stream_source, v2_block);
-    _ = signing_entry;
+    for (signing_entry.V2.items) |signer| {
+        try stdout.writer().print("Signed Data: {} items\n", .{
+            signer.signed_data.items.len,
+        });
+        for (signer.signed_data.items) |signed_data| {
+            try stdout.writer().print("\tdigests: {}\n\tcertificates: {}\n\tattributes: {}\n", .{
+                signed_data.digests.items.len,
+                signed_data.certificates.items.len,
+                signed_data.attributes.items.len,
+            });
+        }
+
+        try stdout.writer().print("Signatures: {} items\n", .{
+            signer.signatures.items.len,
+        });
+        for (signer.signatures.items) |signature| {
+            try stdout.writer().print("\tAlgorithm: {}\n\tsignature length: {}\n", .{
+                signature.algorithm,
+                signature.signature.len,
+            });
+        }
+
+        try stdout.writer().print("Public Key: {}\n", .{
+            signer.public_key,
+        });
+    }
 }
 
 pub fn alignZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {

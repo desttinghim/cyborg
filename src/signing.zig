@@ -66,7 +66,12 @@ pub const SigningEntry = union(Tag) {
             }
 
             const digest_magic = 0x5a;
-            const Attribute = struct {};
+            const Attribute = struct {
+                id: ID,
+                value: []const u8,
+
+                const ID = enum(u32) { _ };
+            };
         };
 
         pub const Signature = struct {
@@ -280,9 +285,12 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
 
         const signed_data_sequence = try get_length_prefixed_slice(signer_slice);
         std.debug.print("\tsigned data {}\n", .{signed_data_sequence.slice.len});
-        signed_data: {
+        {
             const digest_sequence = try get_length_prefixed_slice(signed_data_sequence.slice);
             std.debug.print("\t\tdigest_sequence {}\n", .{digest_sequence.slice.len});
+
+            var digests = std.ArrayListUnmanaged([]const u8){};
+            errdefer digests.deinit(alloc);
 
             var digest_iter = try get_length_prefixed_slice(digest_sequence.slice);
             var digest_chunk_opt: ?[]const u8 = digest_iter.slice;
@@ -293,6 +301,11 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
                     else => return error.InvalidSignatureAlgorithm,
                 }
                 std.debug.print("\t\t\tdigest_chunk {}\tsignature algorithm id 0x{x}\n", .{ digest_chunk.len, signature_algorithm_id });
+
+                const digest_length = std.mem.readInt(u32, digest_chunk[4..8], .Little);
+                const digest = digest_chunk[8 .. 8 + digest_length];
+
+                try digests.append(alloc, digest);
 
                 digest_iter = get_length_prefixed_slice(digest_iter.remaining orelse break) catch break;
                 digest_chunk_opt = digest_iter.slice;
@@ -320,18 +333,32 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
             const attribute_sequence = try get_length_prefixed_slice(x509_sequence.remaining.?);
             std.debug.print("\t\tattribute list {}\n", .{attribute_sequence.slice.len});
 
-            var attribute_iter = get_length_prefixed_slice(attribute_sequence.slice) catch break :signed_data;
-            var attribute_chunk_opt: ?[]const u8 = attribute_iter.slice;
-            while (attribute_chunk_opt) |attribute_chunk| {
-                std.debug.print("\t\t\tattribute {}\n", .{attribute_chunk.len});
+            var attributes = std.ArrayListUnmanaged(SigningEntry.Signer.SignedData.Attribute){};
+            errdefer attributes.clearAndFree(alloc);
 
-                attribute_iter = get_length_prefixed_slice(attribute_iter.remaining orelse break) catch break;
-                attribute_chunk_opt = attribute_iter.slice;
+            attribute: {
+                var attribute_iter = get_length_prefixed_slice(attribute_sequence.slice) catch break :attribute;
+                var attribute_chunk_opt: ?[]const u8 = attribute_iter.slice;
+                while (attribute_chunk_opt) |attribute_chunk| {
+                    std.debug.print("\t\t\tattribute {}\n", .{attribute_chunk.len});
+
+                    const id = std.mem.readInt(u32, attribute_chunk[0..4], .Little);
+                    try attributes.append(alloc, .{
+                        .id = @intToEnum(SigningEntry.Signer.SignedData.Attribute.ID, id),
+                        .value = attribute_chunk[4..],
+                    });
+
+                    attribute_iter = get_length_prefixed_slice(attribute_iter.remaining orelse break) catch break;
+                    attribute_chunk_opt = attribute_iter.slice;
+                }
             }
 
-            // try signed_data.append(alloc, .{
-            //     .alloc = alloc,
-            // });
+            try signed_data.append(alloc, .{
+                .alloc = alloc,
+                .digests = digests,
+                .certificates = x509_list,
+                .attributes = attributes,
+            });
         }
 
         var signatures = std.ArrayListUnmanaged(SigningEntry.Signer.Signature){};
