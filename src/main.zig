@@ -243,7 +243,14 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    var stream_source = std.io.StreamSource{ .file = file };
+    const apk_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, std.os.MAP.PRIVATE, file.handle, 0);
+    defer std.os.munmap(apk_map);
+
+    file.close(); // now that the file is mmapped, it can be closed immediately with no issues
+
+    var fixed_buffer_stream = std.io.FixedBufferStream([]const u8){ .buffer = apk_map, .pos = 0 };
+
+    var stream_source = std.io.StreamSource{ .const_buffer = fixed_buffer_stream };
 
     var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
     try archive_reader.load();
@@ -296,6 +303,27 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
             signer.public_key,
         });
     }
+
+    const signing_block_offset = try signing.get_signing_block_offset(&stream_source, archive_reader.directory_offset);
+    const directory_offset = archive_reader.directory_offset;
+    const eocd_offset = directory_offset + archive_reader.directory_size; // TODO: get the end of central directory from zig-archive
+
+    // The APK signing algorithm treats the directory offset in the EOCD record
+    // as a point to the beginning of the signing block offset. This is necessary
+    // because inserting the signing block can move the beginning of the central
+    // directory record, which would make the signing block invalid.
+    signing.update_directory_offset(apk_map, eocd_offset, signing_block_offset);
+
+    const chunks = try signing.splitAPK(alloc, apk_map, signing_block_offset, directory_offset, eocd_offset);
+    try stdout.writer().print("Chunk total: {}\n", .{chunks.len});
+
+    // TODO: allocate digest buffers
+    for (chunks.items) |chunk| {
+        // TODO: compute the digest for each chunk
+    }
+
+    // TODO: compute the digest over all chunks
+    // TODO: compare the final digest with the one stored in the signing block
 }
 
 pub fn alignZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {

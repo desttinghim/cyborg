@@ -1,15 +1,6 @@
 //! This file implements signing and verification of Android APKs as described at the
 //! [Android Source APK Signature Scheme v2 page (as of 2023-04-16)][https://source.android.com/docs/security/features/apksigning/v2]
 
-const SigningBlock = struct {
-    stream_source: std.io.StreamSource,
-    buffer: []const u8,
-    size_of_block: u64,
-    entries: []SigningEntry,
-    // size_of_block repeated
-    magic: [16]u8 = "APK Sig Block 42",
-};
-
 pub const SigningEntry = union(Tag) {
     V2: std.ArrayList(Signer),
 
@@ -103,64 +94,63 @@ pub const SigningEntry = union(Tag) {
     };
 };
 
-const Sections = struct {
-    stream_source: *std.io.StreamSource,
-    contents_index: u64,
-    signing_block_index: u64,
-    central_directory_index: u64,
-    end_of_central_directory_index: u64,
-};
-
-/// Intermediate data structure for signing/verifying an APK. Each section is split into chunks.
-/// Each chunk is 1MB, unless it is the final chunk in a section, in which case it may be smaller.
-const Chunks = struct {
-    sections: *Sections,
-    chunks: []Slice,
-
-    const magic = 0xa5;
-    const Slice = struct {
-        start: u64,
-        end: u64,
-    };
-};
-
 /// Splits an APK into chunks for signing/verifying.
-fn splitAPK(alloc: std.mem.Allocator, file: std.fs.File) Chunks {
-    var stream_source = std.io.StreamSource{ .file = file };
+pub fn splitAPK(ally: std.mem.Allocator, mmapped_file: []const u8, signing_pos: usize, central_directory_pos: usize, end_of_cd_pos: usize) ![][]const u8 {
+    const section1 = mmapped_file[0..signing_pos];
+    // const section2 = mmapped_file[signing_pos..central_directory_pos];
+    const section3 = mmapped_file[central_directory_pos..end_of_cd_pos];
+    const section4 = mmapped_file[end_of_cd_pos..];
 
-    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
-    try archive_reader.load();
+    std.debug.assert(section1.len != 0);
+    // std.debug.assert(section2.len != 0);
+    std.debug.assert(section3.len != 0);
+    std.debug.assert(section4.len != 0);
 
-    // Verify that the magic bytes are present
+    const MB = 2 << 20;
+    const section1_count = ((section1.len - 1) / MB) + 1;
+    // const section2_count = ((section2.len - 1) / MB) + 1;
+    const section3_count = ((section3.len - 1) / MB) + 1;
+    const section4_count = ((section4.len - 1) / MB) + 1;
 
-    const magic_byte_offset = archive_reader.directory_offset - 16;
+    const total_count = section1_count + section3_count + section4_count;
+
+    var chunks = std.ArrayListUnmanaged([]const u8){};
+    try chunks.ensureTotalCapacity(ally, total_count);
+
+    // Split ZIP entries into 1 mb chunks
     {
-        var buf: [16]u8 = undefined;
-
-        try stream_source.seekTo(magic_byte_offset);
-
-        std.debug.assert(try stream_source.read(&buf) == 16);
-
-        if (!std.mem.eql(u8, &buf, "APK Sig Block 42")) return error.MissingSigningBlock;
+        var count: usize = 0;
+        while (count < section1_count) : (count += 1) {
+            const end = @min((count + 1) * MB, section1.len);
+            chunks.appendAssumeCapacity(section1[count * MB .. end]);
+        }
+    }
+    // Split Central Directory into 1 mb chunks
+    {
+        var count: usize = 0;
+        while (count < section3_count) : (count += 1) {
+            const end = @min((count + 1) * MB, section3.len);
+            chunks.appendAssumeCapacity(section3[count * MB .. end]);
+        }
+    }
+    // Split End of Central Directory into 1 mb chunks
+    {
+        var count: usize = 0;
+        while (count < section4_count) : (count += 1) {
+            const end = @min((count + 1) * MB, section4.len);
+            chunks.appendAssumeCapacity(section4[count * MB .. end]);
+        }
     }
 
-    // Get the block size
+    return chunks.toOwnedSlice(ally);
+}
 
-    const block_size_offset = magic_byte_offset - 8;
-
-    try stream_source.seekTo(block_size_offset);
-
-    const block_size = try stream_source.reader().readInt(u64, .Little);
-
-    const block_start = archive_reader.directory_offset - block_size;
-
-    const block_size_offset_2 = block_start - 8;
-
-    try stream_source.seekTo(block_size_offset_2);
-
-    const block_size_2 = try stream_source.reader().readInt(u64, .Little);
-
-    if (block_size != block_size_2) return error.BlockSizeMismatch;
+/// Updates the EOCD directory offset to point to start of signing block
+pub fn update_directory_offset(mmapped_file: []u8, eocd_offset: usize, signing_pos: usize) void {
+    std.debug.assert(signing_pos < std.math.maxInt(u32));
+    const pos = @intCast(u32, signing_pos);
+    const eocd = mmapped_file[eocd_offset..];
+    std.mem.writeInt(u32, eocd[16..20], pos, .Little);
 }
 
 /// Verifies that a signed APK is valid.
@@ -186,6 +176,40 @@ fn splitAPK(alloc: std.mem.Allocator, file: std.fs.File) Chunks {
 pub fn verify() void {}
 
 pub const OffsetSlice = struct { position: u64, slice: []const u8 };
+
+pub fn get_signing_block_offset(stream_source: *std.io.StreamSource, directory_offset: u64) !u64 {
+    // Verify that the magic bytes are present
+    const magic_byte_offset = directory_offset - 16;
+    {
+        var buf: [16]u8 = undefined;
+
+        try stream_source.seekTo(magic_byte_offset);
+
+        std.debug.assert(try stream_source.read(&buf) == 16);
+
+        if (!std.mem.eql(u8, &buf, "APK Sig Block 42")) return error.MissingSigningBlock;
+    }
+
+    // Get the block size
+
+    const block_size_offset = magic_byte_offset - 8;
+
+    try stream_source.seekTo(block_size_offset);
+
+    const block_size = try stream_source.reader().readInt(u64, .Little);
+
+    const block_start = directory_offset - block_size;
+
+    const block_size_offset_2 = block_start - 8;
+
+    try stream_source.seekTo(block_size_offset_2);
+
+    const block_size_2 = try stream_source.reader().readInt(u64, .Little);
+
+    if (block_size != block_size_2) return error.BlockSizeMismatch;
+
+    return block_size_offset;
+}
 
 pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, directory_offset: u64) !std.AutoArrayHashMap(SigningEntry.Tag, OffsetSlice) {
     // Verify that the magic bytes are present
@@ -221,7 +245,7 @@ pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.Strea
     const actual_size = block_size - 24;
 
     // Read signing block into memory
-    // TODO: clean up memory properly
+    // TODO: make use of memory mapping
     var buffer = try alloc.alloc(u8, actual_size);
     errdefer alloc.free(buffer);
 
@@ -393,6 +417,13 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
 
         const pk_components = try std.crypto.Certificate.rsa.PublicKey.parseDer(subject_pk_bitstring);
         const public_key = try std.crypto.Certificate.rsa.PublicKey.fromBytes(pk_components.exponent, pk_components.modulus, alloc);
+
+        {
+            const sdpk = signed_data.items[0].certificates[0][0].pubKey();
+            std.debug.assert(std.mem.eql(u8, subject_pk_bitstring, sdpk));
+        }
+
+        // TODO: make sure signed data and signatures have the same list of algorithms
 
         try signers.append(.{
             .alloc = alloc,
