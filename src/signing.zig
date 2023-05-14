@@ -145,14 +145,95 @@ pub fn splitAPK(ally: std.mem.Allocator, mmapped_file: []const u8, signing_pos: 
     return chunks.toOwnedSlice(ally);
 }
 
-/// Updates the EOCD directory offset to point to start of signing block
-pub fn update_directory_offset(mmapped_file: []u8, eocd_offset: usize, signing_pos: usize) void {
-    std.debug.assert(signing_pos < std.math.maxInt(u32));
-    const pos = @intCast(u32, signing_pos);
-    const eocd = mmapped_file[eocd_offset..];
+const Signing = @This();
+
+signing_block_offset: u64,
+central_directory_offset: u64,
+end_of_central_directory_offset: u64,
+
+signing_block: []const u8,
+
+pub fn update_eocd_directory_offset(signing: Signing, mmapped_file: []u8) void {
+    std.debug.assert(signing.signing_block_offset < std.math.maxInt(u32));
+    const pos = @intCast(u32, signing.signing_block_offset);
+    const eocd = mmapped_file[signing.end_of_central_directory_offset..];
     std.mem.writeInt(u32, eocd[16..20], pos, .Little);
 }
 
+/// Locates the signing block and verifies that the:
+/// - two size fields of the APK signing Block contain the same value
+/// - ZIP central directory is immediately followed by the ZIP end of central directory record
+/// - ZIP end of central directory record is not followed by more data
+///
+/// # Parameters
+/// - mmapped_file: the contents of the APK file as a byte slice
+///
+/// # Return
+/// Returns an instance of the Signing struct
+pub fn get_offsets(alloc: std.mem.Allocator, mmapped_file: []const u8) !Signing {
+    var fixed_buffer_stream = std.io.FixedBufferStream([]const u8){ .buffer = mmapped_file, .pos = 0 };
+    var stream_source = std.io.StreamSource{ .const_buffer = fixed_buffer_stream };
+
+    // TODO: change zig-archive to allow operating without a buffer
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
+    try archive_reader.load();
+
+    const signing_block = try get_signing_block_offset(&stream_source, archive_reader.directory_offset);
+
+    const expected_eocd_start = archive_reader.directory_offset + archive_reader.directory_size;
+
+    // TODO: verify central directory immediately follows ZIP eocd
+    // if (!std.mem.eql(u8, mmapped_file[expected_eocd_start..][0..4], &std.mem.toBytes(archive.formats.zip.internal.EndOfCentralDirectoryRecord.signature))) {
+    //     return error.EOCDDoesNotImmediatelyFollowCentralDirectory;
+    // }
+
+    // TODO: verify eocd is end of file. Is the comment field allowed to contain data?
+
+    return Signing{
+        .signing_block_offset = signing_block,
+        .central_directory_offset = archive_reader.directory_offset,
+        .end_of_central_directory_offset = expected_eocd_start,
+        .signing_block = mmapped_file[signing_block..archive_reader.directory_offset],
+    };
+}
+
+/// Given the offset of the Central Directory in a stream, finds the start of APK signing block
+/// and verifies that the two size fields contain the same value
+fn get_signing_block_offset(stream_source: *std.io.StreamSource, directory_offset: u64) !u64 {
+    // Verify that the magic bytes are present
+    const magic_byte_offset = directory_offset - 16;
+    {
+        var buf: [16]u8 = undefined;
+
+        try stream_source.seekTo(magic_byte_offset);
+
+        std.debug.assert(try stream_source.read(&buf) == 16);
+
+        if (!std.mem.eql(u8, &buf, "APK Sig Block 42")) return error.MissingSigningBlock;
+    }
+
+    // Get the block size
+
+    const block_size_offset = magic_byte_offset - 8;
+
+    try stream_source.seekTo(block_size_offset);
+
+    const block_size = try stream_source.reader().readInt(u64, .Little);
+
+    const block_start = directory_offset - block_size;
+
+    const block_size_offset_2 = block_start - 8;
+
+    try stream_source.seekTo(block_size_offset_2);
+
+    const block_size_2 = try stream_source.reader().readInt(u64, .Little);
+
+    if (block_size != block_size_2) return error.BlockSizeMismatch;
+
+    return block_start;
+}
+
+/// Updates the EOCD directory offset to point to start of signing block
 /// Verifies that a signed APK is valid.
 /// [The following description of the algorithm is copied from the Android Source documentation.][https://source.android.com/docs/security/features/apksigning/v2#v2-verification]
 /// 1. Locate the signing block and verify that the
@@ -175,126 +256,35 @@ pub fn update_directory_offset(mmapped_file: []u8, eocd_offset: usize, signing_p
 /// 4. Verification succeeds if at least one `signer` was found and step 3 succeeded for each found `signer`.
 pub fn verify() void {}
 
-pub const OffsetSlice = struct { position: u64, slice: []const u8 };
-
-pub fn get_signing_block_offset(stream_source: *std.io.StreamSource, directory_offset: u64) !u64 {
-    // Verify that the magic bytes are present
-    const magic_byte_offset = directory_offset - 16;
-    {
-        var buf: [16]u8 = undefined;
-
-        try stream_source.seekTo(magic_byte_offset);
-
-        std.debug.assert(try stream_source.read(&buf) == 16);
-
-        if (!std.mem.eql(u8, &buf, "APK Sig Block 42")) return error.MissingSigningBlock;
-    }
-
-    // Get the block size
-
-    const block_size_offset = magic_byte_offset - 8;
-
-    try stream_source.seekTo(block_size_offset);
-
-    const block_size = try stream_source.reader().readInt(u64, .Little);
-
-    const block_start = directory_offset - block_size;
-
-    const block_size_offset_2 = block_start - 8;
-
-    try stream_source.seekTo(block_size_offset_2);
-
-    const block_size_2 = try stream_source.reader().readInt(u64, .Little);
-
-    if (block_size != block_size_2) return error.BlockSizeMismatch;
-
-    return block_size_offset;
-}
-
-pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, directory_offset: u64) !std.AutoArrayHashMap(SigningEntry.Tag, OffsetSlice) {
-    // Verify that the magic bytes are present
-    const magic_byte_offset = directory_offset - 16;
-    {
-        var buf: [16]u8 = undefined;
-
-        try stream_source.seekTo(magic_byte_offset);
-
-        std.debug.assert(try stream_source.read(&buf) == 16);
-
-        if (!std.mem.eql(u8, &buf, "APK Sig Block 42")) return error.MissingSigningBlock;
-    }
-
-    // Get the block size
-
-    const block_size_offset = magic_byte_offset - 8;
-
-    try stream_source.seekTo(block_size_offset);
-
-    const block_size = try stream_source.reader().readInt(u64, .Little);
-
-    const block_start = directory_offset - block_size;
-
-    const block_size_offset_2 = block_start - 8;
-
-    try stream_source.seekTo(block_size_offset_2);
-
-    const block_size_2 = try stream_source.reader().readInt(u64, .Little);
-
-    if (block_size != block_size_2) return error.BlockSizeMismatch;
-
-    const actual_size = block_size - 24;
-
-    // Read signing block into memory
-    // TODO: make use of memory mapping
-    var buffer = try alloc.alloc(u8, actual_size);
-    errdefer alloc.free(buffer);
-
-    std.debug.assert(try stream_source.reader().read(buffer) == actual_size);
-
-    // Create the hashmap and add all the signing blocks to it
-
-    var id_value_pairs = std.AutoArrayHashMap(SigningEntry.Tag, OffsetSlice).init(alloc);
-    errdefer id_value_pairs.deinit();
-
+/// Within the signing block, finds the entry that corresponds to a given
+/// signing scheme version.
+///
+/// # Parameters
+/// - signing_block: A slice of bytes corresponding to the APK signing block
+/// - tag: The SigningEntry.Tag value for the desired entry
+///
+/// # Return
+/// Returns a slice corresponding to the signing entry within the signing block
+pub fn locate_entry(signing: Signing, tag: SigningEntry.Tag) ![]const u8 {
     var index: usize = 0;
-    while (index < buffer.len) {
-        const size = std.mem.readInt(u64, buffer[index..][0..8], .Little);
-        std.debug.assert(size < buffer.len);
-        const id = @intToEnum(SigningEntry.Tag, std.mem.readInt(u32, buffer[index + 8 ..][0..4], .Little));
+    while (index < signing.signing_block.len) {
+        const size = std.mem.readInt(u64, signing.signing_block[index..][0..8], .Little);
+        if (size > signing.signing_block.len) return error.SigningEntryLengthOutOfBounds;
+        const entry_tag = @intToEnum(SigningEntry.Tag, std.mem.readInt(u32, signing.signing_block[index + 8 ..][0..4], .Little));
 
-        try id_value_pairs.put(id, .{ .position = block_start + index, .slice = buffer[index + 12 ..][0 .. size - 4] });
+        if (entry_tag == tag)
+            return signing.signing_block[index + 12 ..][0 .. size - 4];
 
         index += size + 8;
     }
-
-    return id_value_pairs;
+    return error.EntryNotFound;
 }
 
-const SliceIter = struct {
-    slice: []const u8,
-    remaining: ?[]const u8,
-};
-
-pub fn get_length_prefixed_slice(slice: []const u8) !SliceIter {
-    if (slice.len <= 4) return error.SliceTooSmall;
-    const length = std.mem.readInt(u32, slice[0..4], .Little);
-    const new_slice = slice[4..];
-    if (length == slice.len) return .{ .slice = new_slice[0..length], .remaining = null };
-    if (length > slice.len) {
-        return error.OutOfBounds;
-    }
-    return .{ .slice = new_slice[0..length], .remaining = new_slice[length..] };
-}
-
-pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, stream_slice: OffsetSlice) !SigningEntry {
-    _ = stream_source;
-    // try stream_source.seekTo(stream_slice.start);
-
+pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry {
     var signers = std.ArrayList(SigningEntry.Signer).init(alloc);
     errdefer signers.deinit();
 
-    // const signer_list_end = std.mem.readInt(u32, stream_slice[0..4], .Little);
-    const signer_list_iter = try get_length_prefixed_slice(stream_slice.slice);
+    const signer_list_iter = try get_length_prefixed_slice(entry_slice);
 
     var iter: SliceIter = try get_length_prefixed_slice(signer_list_iter.slice);
     var signer_slice_opt: ?[]const u8 = iter.slice;
@@ -437,6 +427,23 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
         signer_slice_opt = iter.slice;
     }
     return SigningEntry{ .V2 = signers };
+}
+
+// Utility functions for working with signing block chunks
+const SliceIter = struct {
+    slice: []const u8,
+    remaining: ?[]const u8,
+};
+
+pub fn get_length_prefixed_slice(slice: []const u8) !SliceIter {
+    if (slice.len <= 4) return error.SliceTooSmall;
+    const length = std.mem.readInt(u32, slice[0..4], .Little);
+    const new_slice = slice[4..];
+    if (length == slice.len) return .{ .slice = new_slice[0..length], .remaining = null };
+    if (length > slice.len) {
+        return error.OutOfBounds;
+    }
+    return .{ .slice = new_slice[0..length], .remaining = new_slice[length..] };
 }
 
 // Imports

@@ -246,38 +246,12 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     const apk_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, std.os.MAP.PRIVATE, file.handle, 0);
     defer std.os.munmap(apk_map);
 
-    file.close(); // now that the file is mmapped, it can be closed immediately with no issues
+    const signing_block = try signing.get_offsets(alloc, apk_map);
 
-    var fixed_buffer_stream = std.io.FixedBufferStream([]const u8){ .buffer = apk_map, .pos = 0 };
-
-    var stream_source = std.io.StreamSource{ .const_buffer = fixed_buffer_stream };
-
-    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
-    try archive_reader.load();
-
-    var id_value_pairs = try signing.get_signing_blocks(alloc, &stream_source, archive_reader.directory_offset);
-
-    {
-        var iter = id_value_pairs.iterator();
-        try stdout.writer().print("\nSigning Blocks\n{s:<16}{s:<12}{s:<12}{s:<12}\n", .{ "ID", "Start", "End", "Length" });
-        try stdout.writer().print("{s:-<15} {s:-<11} {s:-<11} {s:-<11}\n", .{ "", "", "", "" });
-        while (iter.next()) |id_value| {
-            const start = id_value.value_ptr.position;
-            const end = start + id_value.value_ptr.slice.len;
-            var buf: [64]u8 = undefined;
-            const name = switch (id_value.key_ptr.*) {
-                inline .V2 => |tag| try std.fmt.bufPrint(&buf, "0x{X} ({s})", .{ @enumToInt(tag), @tagName(tag) }),
-                _ => |value| try std.fmt.bufPrint(&buf, "0x{X}", .{@enumToInt(value)}),
-            };
-            try stdout.writer().print("{s:<16}0x{X:<10}0x{X:<10}{:<10}\n", .{ name, start, end, end - start });
-        }
-        try stdout.writer().print("\n", .{});
-    }
-
-    const v2_block = id_value_pairs.get(signing.SigningEntry.Tag.V2) orelse return error.MissingV2;
+    const v2_block = signing_block.locate_entry(signing.SigningEntry.Tag.V2) catch return error.MissingV2;
 
     // TODO: verify signatures before parsing signed data
-    const signing_entry = try signing.parse_v2(alloc, &stream_source, v2_block);
+    const signing_entry = try signing.parse_v2(alloc, v2_block);
     for (signing_entry.V2.items) |signer| {
         try stdout.writer().print("Signed Data: {} items\n", .{
             signer.signed_data.items.len,
@@ -305,15 +279,15 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
         });
     }
 
-    const signing_block_offset = try signing.get_signing_block_offset(&stream_source, archive_reader.directory_offset);
-    const directory_offset = archive_reader.directory_offset;
-    const eocd_offset = directory_offset + archive_reader.directory_size; // TODO: get the end of central directory from zig-archive
+    const signing_block_offset = signing_block.signing_block_offset;
+    const directory_offset = signing_block.central_directory_offset;
+    const eocd_offset = signing_block.end_of_central_directory_offset; // TODO: get the end of central directory from zig-archive
 
     // The APK signing algorithm treats the directory offset in the EOCD record
     // as a point to the beginning of the signing block offset. This is necessary
     // because inserting the signing block can move the beginning of the central
     // directory record, which would make the signing block invalid.
-    signing.update_directory_offset(apk_map, eocd_offset, signing_block_offset);
+    signing_block.update_eocd_directory_offset(apk_map);
 
     const chunks = try signing.splitAPK(alloc, apk_map, signing_block_offset, directory_offset, eocd_offset);
     try stdout.writer().print("Chunk total: {}\n", .{chunks.len});
@@ -363,6 +337,8 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     } else {
         try stdout.writer().print("ERROR - Digest Value Differs!\n", .{});
     }
+
+    // TODO: Verify the SubjectPublicKeyInfo of the certificate is identical to the public key
 }
 
 pub fn alignZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
