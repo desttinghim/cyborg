@@ -266,6 +266,11 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
             signer.signed_data.attributes.items.len,
         });
 
+        for (signer.signed_data.digests.items) |digest| {
+            try stdout.writer().print("\tLength {}\tAlgorithm {}\n", .{ digest.data.len, digest.algorithm });
+            try stdout.writer().print("\t{}\n", .{std.fmt.fmtSliceHexUpper(digest.data)});
+        }
+
         try stdout.writer().print("Signatures: {} items\n", .{
             signer.signatures.items.len,
         });
@@ -331,8 +336,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     const final_digest = hash.finalResult();
 
     // Compare the final digest with the one stored in the signing block
-    const digest_is_equal = std.mem.eql(u8, signing_entry.V2.items[0].signed_data.digests.items[0], &final_digest);
-    try stdout.writer().print("{}\n", .{std.fmt.fmtSliceHexUpper(signing_entry.V2.items[0].signed_data.digests.items[0])});
+    const digest_is_equal = std.mem.eql(u8, signing_entry.V2.items[0].signed_data.digests.items[0].data, &final_digest);
     try stdout.writer().print("{}\n", .{std.fmt.fmtSliceHexUpper(&final_digest)});
     if (digest_is_equal) {
         try stdout.writer().print("Digest Equal\n", .{});

@@ -37,7 +37,7 @@ pub const SigningEntry = union(Tag) {
 
         pub const SignedData = struct {
             alloc: std.mem.Allocator,
-            digests: std.ArrayListUnmanaged([]const u8),
+            digests: std.ArrayListUnmanaged(Digest),
             certificates: std.ArrayListUnmanaged(std.crypto.Certificate.Parsed),
             attributes: std.ArrayListUnmanaged(Attribute),
 
@@ -53,6 +53,11 @@ pub const SigningEntry = union(Tag) {
                 signed_data.attributes.clearAndFree(signed_data.alloc);
             }
 
+            const Digest = struct {
+                algorithm: Algorithm,
+                data: []const u8,
+            };
+
             const digest_magic = 0x5a;
             const Attribute = struct {
                 id: ID,
@@ -66,34 +71,34 @@ pub const SigningEntry = union(Tag) {
             algorithm: Algorithm,
             signature: []const u8,
 
-            pub const Algorithm = enum(u32) {
-                // 0x0101—RSASSA-PSS with SHA2-256 digest, SHA2-256 MGF1, 32 bytes of salt, trailer: 0xbc
-                sha256_RSASSA_PSS = 0x0101,
-                // 0x0102—RSASSA-PSS with SHA2-512 digest, SHA2-512 MGF1, 64 bytes of salt, trailer: 0xbc
-                sha512_RSASSA_PSS = 0x0102,
-                // 0x0103—RSASSA-PKCS1-v1_5 with SHA2-256 digest. This is for build systems which require deterministic signatures.
-                sha256_RSASSA_PKCS1_v1_5 = 0x0103,
-                // 0x0104—RSASSA-PKCS1-v1_5 with SHA2-512 digest. This is for build systems which require deterministic signatures.
-                sha512_RSASSA_PKCS1_v1_5 = 0x0104,
-                // 0x0201—ECDSA with SHA2-256 digest
-                sha256_ECDSA = 0x0201,
-                // 0x0202—ECDSA with SHA2-512 digest
-                sha512_ECDSA = 0x0202,
-                // 0x0301—DSA with SHA2-256 digest
-                sha256_DSA_PKCS1_v1_5 = 0x0301,
-                _,
-            };
-
             pub fn deinit(signature: *Signature) void {
                 signature.alloc.free(signature.signature);
             }
+        };
+
+        pub const Algorithm = enum(u32) {
+            // 0x0101—RSASSA-PSS with SHA2-256 digest, SHA2-256 MGF1, 32 bytes of salt, trailer: 0xbc
+            sha256_RSASSA_PSS = 0x0101,
+            // 0x0102—RSASSA-PSS with SHA2-512 digest, SHA2-512 MGF1, 64 bytes of salt, trailer: 0xbc
+            sha512_RSASSA_PSS = 0x0102,
+            // 0x0103—RSASSA-PKCS1-v1_5 with SHA2-256 digest. This is for build systems which require deterministic signatures.
+            sha256_RSASSA_PKCS1_v1_5 = 0x0103,
+            // 0x0104—RSASSA-PKCS1-v1_5 with SHA2-512 digest. This is for build systems which require deterministic signatures.
+            sha512_RSASSA_PKCS1_v1_5 = 0x0104,
+            // 0x0201—ECDSA with SHA2-256 digest
+            sha256_ECDSA = 0x0201,
+            // 0x0202—ECDSA with SHA2-512 digest
+            sha512_ECDSA = 0x0202,
+            // 0x0301—DSA with SHA2-256 digest
+            sha256_DSA_PKCS1_v1_5 = 0x0301,
+            _,
         };
     };
 };
 
 /// Splits an APK into chunks for signing/verifying.
 pub fn splitAPK(ally: std.mem.Allocator, mmapped_file: []const u8, signing_pos: usize, central_directory_pos: usize, end_of_cd_pos: usize) ![][]const u8 {
-    const section1 = mmapped_file[0..signing_pos];
+    const section1 = mmapped_file[0 .. signing_pos - 8]; // -8 to account for second signing block size field
     // const section2 = mmapped_file[signing_pos..central_directory_pos];
     const section3 = mmapped_file[central_directory_pos..end_of_cd_pos];
     const section4 = mmapped_file[end_of_cd_pos..];
@@ -119,7 +124,9 @@ pub fn splitAPK(ally: std.mem.Allocator, mmapped_file: []const u8, signing_pos: 
         var count: usize = 0;
         while (count < section1_count) : (count += 1) {
             const end = @min((count + 1) * MB, section1.len);
-            chunks.appendAssumeCapacity(section1[count * MB .. end]);
+            const chunk = section1[count * MB .. end];
+            std.debug.assert(chunk.len <= MB);
+            chunks.appendAssumeCapacity(chunk);
         }
     }
     // Split Central Directory into 1 mb chunks
@@ -127,7 +134,9 @@ pub fn splitAPK(ally: std.mem.Allocator, mmapped_file: []const u8, signing_pos: 
         var count: usize = 0;
         while (count < section3_count) : (count += 1) {
             const end = @min((count + 1) * MB, section3.len);
-            chunks.appendAssumeCapacity(section3[count * MB .. end]);
+            const chunk = section3[count * MB .. end];
+            std.debug.assert(chunk.len <= MB);
+            chunks.appendAssumeCapacity(chunk);
         }
     }
     // Split End of Central Directory into 1 mb chunks
@@ -135,7 +144,9 @@ pub fn splitAPK(ally: std.mem.Allocator, mmapped_file: []const u8, signing_pos: 
         var count: usize = 0;
         while (count < section4_count) : (count += 1) {
             const end = @min((count + 1) * MB, section4.len);
-            chunks.appendAssumeCapacity(section4[count * MB .. end]);
+            const chunk = section4[count * MB .. end];
+            std.debug.assert(chunk.len <= MB);
+            chunks.appendAssumeCapacity(chunk);
         }
     }
 
@@ -290,22 +301,22 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
         const signed_data = signed_data: {
             const digest_sequence = try get_length_prefixed_slice(signed_data_block.slice);
 
-            var digests = std.ArrayListUnmanaged([]const u8){};
+            var digests = std.ArrayListUnmanaged(SigningEntry.Signer.SignedData.Digest){};
             errdefer digests.deinit(alloc);
 
             var digest_iter = try get_length_prefixed_slice(digest_sequence.slice);
             var digest_chunk_opt: ?[]const u8 = digest_iter.slice;
             while (digest_chunk_opt) |digest_chunk| {
                 const signature_algorithm_id = std.mem.readInt(u32, digest_chunk[0..4], .Little);
-                switch (signature_algorithm_id) {
-                    0x101, 0x102, 0x103, 0x104, 0x201, 0x202, 0x301 => {},
-                    else => return error.InvalidSignatureAlgorithm,
-                }
+                const algorithm = @intToEnum(SigningEntry.Signer.Algorithm, signature_algorithm_id);
 
                 const digest_length = std.mem.readInt(u32, digest_chunk[4..8], .Little);
                 const digest = digest_chunk[8 .. 8 + digest_length];
 
-                try digests.append(alloc, digest);
+                try digests.append(alloc, .{
+                    .algorithm = algorithm,
+                    .data = digest,
+                });
 
                 digest_iter = get_length_prefixed_slice(digest_iter.remaining orelse break) catch break;
                 digest_chunk_opt = digest_iter.slice;
@@ -368,7 +379,7 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
                 const signed_data_sig = get_length_prefixed_slice(signature[4..]) catch return error.UnexpectedEndOfStream;
 
                 try signatures.append(alloc, .{
-                    .algorithm = @intToEnum(SigningEntry.Signer.Signature.Algorithm, signature_algorithm_id),
+                    .algorithm = @intToEnum(SigningEntry.Signer.Algorithm, signature_algorithm_id),
                     .signature = signed_data_sig.slice,
                 });
 
