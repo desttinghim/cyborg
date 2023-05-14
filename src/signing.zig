@@ -360,12 +360,50 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
         const public_key_chunk = try get_length_prefixed_slice(signature_sequence.remaining orelse return error.UnexpectedEndOfStream);
         std.debug.print("\tpublic_key {}\n", .{public_key_chunk.slice.len});
 
-        const pk_components = try std.crypto.Certificate.rsa.PublicKey.parseDer(public_key_chunk.slice);
-        const public_key = try std.crypto.Certificate.rsa.PublicKey.fromBytes(pk_components.exponent, pk_components.modulus, alloc);
+        const Element = std.crypto.Certificate.der.Element;
+        const subject_pk_info = try Element.parse(public_key_chunk.slice, 0);
+        std.debug.assert(subject_pk_info.identifier.tag == .sequence);
+
+        const alg_id = try Element.parse(public_key_chunk.slice, subject_pk_info.slice.start);
+        std.debug.assert(alg_id.identifier.tag == .sequence);
+
+        const oid = try Element.parse(public_key_chunk.slice, alg_id.slice.start);
+        std.debug.assert(oid.identifier.tag == .object_identifier);
+        const alg = try std.crypto.Certificate.parseAlgorithmCategory(public_key_chunk.slice, oid);
+        std.debug.print("{any}\n", .{alg});
+
+        const null_val = try Element.parse(public_key_chunk.slice, oid.slice.end);
+
+        const subject_pk = try Element.parse(public_key_chunk.slice, null_val.slice.end);
+        const unused_bits = public_key_chunk.slice[subject_pk.slice.start];
+        _ = unused_bits;
+        const subject_pk_bitstring = public_key_chunk.slice[subject_pk.slice.start + 1 ..];
+
+        const thing = try Element.parse(public_key_chunk.slice, subject_pk.slice.start + 1);
+        const thing2 = try Element.parse(public_key_chunk.slice, thing.slice.start);
+
+        std.debug.print(
+            \\ spki {}
+            \\ ai {}
+            \\ oid {}
+            \\ null {}
+            \\ spk {}
+            \\
+        , .{ subject_pk_info.slice.start, alg_id.slice.start, oid.slice.start, null_val.slice.start, subject_pk.slice.start });
+
+        // const thing = try Element.parse(subject_pk_bitstring, 0);
+
+        std.debug.print("{}\t{}\n", .{ thing.identifier.tag, thing2.identifier.tag });
 
         // var buf: [1024]u8 = undefined;
-        // const base64 = std.base64.standard.Encoder.encode(&buf, public_key.slice);
+        // const base64 = std.base64.standard.Encoder.encode(&buf, public_key_chunk.slice);
         // std.debug.print("{s}\n", .{(base64)});
+
+        // const hex = std.fmt.fmtSliceHexUpper(public_key_chunk.slice);
+        // std.debug.print("{s}\n", .{hex});
+
+        const pk_components = try std.crypto.Certificate.rsa.PublicKey.parseDer(subject_pk_bitstring);
+        const public_key = try std.crypto.Certificate.rsa.PublicKey.fromBytes(pk_components.exponent, pk_components.modulus, alloc);
 
         try signers.append(.{
             .alloc = alloc,
