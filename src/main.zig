@@ -276,6 +276,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
 
     const v2_block = id_value_pairs.get(signing.SigningEntry.Tag.V2) orelse return error.MissingV2;
 
+    // TODO: verify signatures before parsing signed data
     const signing_entry = try signing.parse_v2(alloc, &stream_source, v2_block);
     for (signing_entry.V2.items) |signer| {
         try stdout.writer().print("Signed Data: {} items\n", .{
@@ -317,13 +318,51 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     const chunks = try signing.splitAPK(alloc, apk_map, signing_block_offset, directory_offset, eocd_offset);
     try stdout.writer().print("Chunk total: {}\n", .{chunks.len});
 
-    // TODO: allocate digest buffers
-    for (chunks.items) |chunk| {
-        // TODO: compute the digest for each chunk
+    // TODO: use the correct algorithm instead of assuming Sha256
+    const Sha256 = std.crypto.hash.sha2.Sha256;
+
+    // Allocate enough memory to store all the digests
+    const digest_mem = try alloc.alloc([Sha256.digest_length]u8, chunks.len);
+    defer alloc.free(digest_mem);
+
+    // Loop over every chunk and compute its digest
+    for (chunks, 0..) |chunk, i| {
+        var hash = Sha256.init(.{});
+
+        var size_buf: [4]u8 = undefined;
+        var size = @intCast(u32, chunk.len);
+        std.mem.writeIntSlice(u32, &size_buf, size, .Little);
+
+        hash.update(&.{0xa5}); // Magic value byte
+        hash.update(&size_buf); // Size in bytes, le u32
+        hash.update(chunk); // Chunk contents
+
+        digest_mem[i] = hash.finalResult();
     }
 
-    // TODO: compute the digest over all chunks
-    // TODO: compare the final digest with the one stored in the signing block
+    // Compute the digest over all chunks
+    var hash = Sha256.init(.{});
+
+    var size_buf: [4]u8 = undefined;
+    var size = @intCast(u32, chunks.len);
+    std.mem.writeIntSlice(u32, &size_buf, size, .Little);
+
+    hash.update(&.{0x5a}); // Magic value byte for final digest
+    hash.update(&size_buf);
+    for (digest_mem) |digest| {
+        hash.update(&digest);
+    }
+    const final_digest = hash.finalResult();
+
+    // Compare the final digest with the one stored in the signing block
+    const digest_is_equal = std.mem.eql(u8, signing_entry.V2.items[0].signed_data.items[0].digests.items[0], &final_digest);
+    try stdout.writer().print("{}\n", .{std.fmt.fmtSliceHexUpper(signing_entry.V2.items[0].signed_data.items[0].digests.items[0])});
+    try stdout.writer().print("{}\n", .{std.fmt.fmtSliceHexUpper(&final_digest)});
+    if (digest_is_equal) {
+        try stdout.writer().print("Digest Equal\n", .{});
+    } else {
+        try stdout.writer().print("ERROR - Digest Value Differs!\n", .{});
+    }
 }
 
 pub fn alignZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
