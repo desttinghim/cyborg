@@ -257,7 +257,6 @@ pub fn get_length_prefixed_slice(slice: []const u8) !SliceIter {
     const new_slice = slice[4..];
     if (length == slice.len) return .{ .slice = new_slice[0..length], .remaining = null };
     if (length > slice.len) {
-        std.debug.print("Length of slice {}\tlength of new_slice {}\tprefix {x}\n", .{ slice.len, new_slice.len, length });
         return error.OutOfBounds;
     }
     return .{ .slice = new_slice[0..length], .remaining = new_slice[length..] };
@@ -273,21 +272,15 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
     // const signer_list_end = std.mem.readInt(u32, stream_slice[0..4], .Little);
     const signer_list_iter = try get_length_prefixed_slice(stream_slice.slice);
 
-    std.debug.print("\tstream_slice {}\tsigner_list {}\n", .{ stream_slice.slice.len, signer_list_iter.slice.len });
-
     var iter: SliceIter = try get_length_prefixed_slice(signer_list_iter.slice);
     var signer_slice_opt: ?[]const u8 = iter.slice;
     while (signer_slice_opt) |signer_slice| {
-        std.debug.print("\tsigner {}\n", .{signer_slice.len});
-
         var signed_data = std.ArrayListUnmanaged(SigningEntry.Signer.SignedData){};
         errdefer signed_data.deinit(alloc);
 
         const signed_data_sequence = try get_length_prefixed_slice(signer_slice);
-        std.debug.print("\tsigned data {}\n", .{signed_data_sequence.slice.len});
         {
             const digest_sequence = try get_length_prefixed_slice(signed_data_sequence.slice);
-            std.debug.print("\t\tdigest_sequence {}\n", .{digest_sequence.slice.len});
 
             var digests = std.ArrayListUnmanaged([]const u8){};
             errdefer digests.deinit(alloc);
@@ -300,7 +293,6 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
                     0x101, 0x102, 0x103, 0x104, 0x201, 0x202, 0x301 => {},
                     else => return error.InvalidSignatureAlgorithm,
                 }
-                std.debug.print("\t\t\tdigest_chunk {}\tsignature algorithm id 0x{x}\n", .{ digest_chunk.len, signature_algorithm_id });
 
                 const digest_length = std.mem.readInt(u32, digest_chunk[4..8], .Little);
                 const digest = digest_chunk[8 .. 8 + digest_length];
@@ -312,7 +304,6 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
             }
 
             const x509_sequence = try get_length_prefixed_slice(digest_sequence.remaining.?);
-            std.debug.print("\t\tx509 list {}\n", .{x509_sequence.slice.len});
 
             var x509_list = std.ArrayListUnmanaged(std.crypto.Certificate.Parsed){};
             errdefer x509_list.clearAndFree(alloc);
@@ -320,8 +311,6 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
             var x509_iter = get_length_prefixed_slice(x509_sequence.slice) catch return error.UnexpectedEndOfStream;
             var x509_chunk_opt: ?[]const u8 = x509_iter.slice;
             while (x509_chunk_opt) |x509_chunk| {
-                std.debug.print("\t\t\tx509 {}\n", .{x509_chunk.len});
-
                 const cert = std.crypto.Certificate{ .buffer = x509_chunk, .index = 0 };
                 const parsed = try cert.parse();
                 try x509_list.append(alloc, parsed);
@@ -331,7 +320,6 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
             }
 
             const attribute_sequence = try get_length_prefixed_slice(x509_sequence.remaining.?);
-            std.debug.print("\t\tattribute list {}\n", .{attribute_sequence.slice.len});
 
             var attributes = std.ArrayListUnmanaged(SigningEntry.Signer.SignedData.Attribute){};
             errdefer attributes.clearAndFree(alloc);
@@ -340,8 +328,6 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
                 var attribute_iter = get_length_prefixed_slice(attribute_sequence.slice) catch break :attribute;
                 var attribute_chunk_opt: ?[]const u8 = attribute_iter.slice;
                 while (attribute_chunk_opt) |attribute_chunk| {
-                    std.debug.print("\t\t\tattribute {}\n", .{attribute_chunk.len});
-
                     const id = std.mem.readInt(u32, attribute_chunk[0..4], .Little);
                     try attributes.append(alloc, .{
                         .id = @intToEnum(SigningEntry.Signer.SignedData.Attribute.ID, id),
@@ -365,18 +351,13 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
         errdefer signatures.deinit(alloc);
 
         const signature_sequence = try get_length_prefixed_slice(signed_data_sequence.remaining orelse return error.UnexpectedEndOfStream);
-        std.debug.print("\tsignature_sequence {}\n", .{signature_sequence.slice.len});
         {
             var signature_iter = try get_length_prefixed_slice(signature_sequence.slice);
             var signature_opt: ?[]const u8 = signature_iter.slice;
             while (signature_opt) |signature| {
                 const signature_algorithm_id = std.mem.readInt(u32, signature[0..4], .Little);
-                std.debug.print("\t\t\tsignature {}\tid 0x{X}\n", .{ signature.len, signature_algorithm_id });
-
-                std.debug.print("\t\t\tsignature[4..] {}\n", .{signature[4..].len});
 
                 const signed_data_sig = get_length_prefixed_slice(signature[4..]) catch return error.UnexpectedEndOfStream;
-                std.debug.print("\t\t\tsigned data sig {}\n", .{signed_data_sig.slice.len});
 
                 try signatures.append(alloc, .{
                     .algorithm = @intToEnum(SigningEntry.Signer.Signature.Algorithm, signature_algorithm_id),
@@ -390,7 +371,6 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
         }
 
         const public_key_chunk = try get_length_prefixed_slice(signature_sequence.remaining orelse return error.UnexpectedEndOfStream);
-        std.debug.print("\tpublic_key {}\n", .{public_key_chunk.slice.len});
 
         const Element = std.crypto.Certificate.der.Element;
         const subject_pk_info = try Element.parse(public_key_chunk.slice, 0);
@@ -402,7 +382,7 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
         const oid = try Element.parse(public_key_chunk.slice, alg_id.slice.start);
         std.debug.assert(oid.identifier.tag == .object_identifier);
         const alg = try std.crypto.Certificate.parseAlgorithmCategory(public_key_chunk.slice, oid);
-        std.debug.print("{any}\n", .{alg});
+        _ = alg;
 
         const null_val = try Element.parse(public_key_chunk.slice, oid.slice.end);
 
