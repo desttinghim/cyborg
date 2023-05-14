@@ -22,18 +22,15 @@ pub const SigningEntry = union(Tag) {
 
     pub const Signer = struct {
         alloc: std.mem.Allocator,
-        signed_data: std.ArrayListUnmanaged(SignedData),
+        signed_data: SignedData,
         signatures: std.ArrayListUnmanaged(Signature),
         public_key: std.crypto.Certificate.rsa.PublicKey,
 
         pub fn deinit(signer: *Signer) void {
-            for (signer.signed_data.items) |signed_data| {
-                signed_data.deinit();
-            }
+            signer.signed_data.deinit();
             for (signer.signatures.items) |signature| {
                 signature.deinit();
             }
-            signer.signed_data.clearAndFree();
             signer.signatures.clearAndFree();
             signer.alloc.free(signer.public_key.certificate.buffer);
         }
@@ -289,12 +286,9 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
     var iter: SliceIter = try get_length_prefixed_slice(signer_list_iter.slice);
     var signer_slice_opt: ?[]const u8 = iter.slice;
     while (signer_slice_opt) |signer_slice| {
-        var signed_data = std.ArrayListUnmanaged(SigningEntry.Signer.SignedData){};
-        errdefer signed_data.deinit(alloc);
-
-        const signed_data_sequence = try get_length_prefixed_slice(signer_slice);
-        {
-            const digest_sequence = try get_length_prefixed_slice(signed_data_sequence.slice);
+        const signed_data_block = try get_length_prefixed_slice(signer_slice);
+        const signed_data = signed_data: {
+            const digest_sequence = try get_length_prefixed_slice(signed_data_block.slice);
 
             var digests = std.ArrayListUnmanaged([]const u8){};
             errdefer digests.deinit(alloc);
@@ -353,18 +347,18 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
                 }
             }
 
-            try signed_data.append(alloc, .{
+            break :signed_data .{
                 .alloc = alloc,
                 .digests = digests,
                 .certificates = x509_list,
                 .attributes = attributes,
-            });
-        }
+            };
+        };
 
         var signatures = std.ArrayListUnmanaged(SigningEntry.Signer.Signature){};
         errdefer signatures.deinit(alloc);
 
-        const signature_sequence = try get_length_prefixed_slice(signed_data_sequence.remaining orelse return error.UnexpectedEndOfStream);
+        const signature_sequence = try get_length_prefixed_slice(signed_data_block.remaining orelse return error.UnexpectedEndOfStream);
         {
             var signature_iter = try get_length_prefixed_slice(signature_sequence.slice);
             var signature_opt: ?[]const u8 = signature_iter.slice;
@@ -409,7 +403,7 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
         const public_key = try std.crypto.Certificate.rsa.PublicKey.fromBytes(pk_components.exponent, pk_components.modulus, alloc);
 
         {
-            const sdpk = signed_data.items[0].certificates[0][0].pubKey();
+            const sdpk = signed_data.certificates[0][0].pubKey();
             std.debug.assert(std.mem.eql(u8, subject_pk_bitstring, sdpk));
         }
 

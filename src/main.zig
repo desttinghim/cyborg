@@ -253,16 +253,18 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     // TODO: verify signatures before parsing signed data
     const signing_entry = try signing.parse_v2(alloc, v2_block);
     for (signing_entry.V2.items) |signer| {
-        try stdout.writer().print("Signed Data: {} items\n", .{
-            signer.signed_data.items.len,
+        try stdout.writer().print(
+            \\
+            \\Signed Data:
+            \\    digests:      {}
+            \\    certificates: {}
+            \\    attributes:   {}
+            \\
+        , .{
+            signer.signed_data.digests.items.len,
+            signer.signed_data.certificates.items.len,
+            signer.signed_data.attributes.items.len,
         });
-        for (signer.signed_data.items) |signed_data| {
-            try stdout.writer().print("\tdigests: {}\n\tcertificates: {}\n\tattributes: {}\n", .{
-                signed_data.digests.items.len,
-                signed_data.certificates.items.len,
-                signed_data.attributes.items.len,
-            });
-        }
 
         try stdout.writer().print("Signatures: {} items\n", .{
             signer.signatures.items.len,
@@ -329,8 +331,8 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     const final_digest = hash.finalResult();
 
     // Compare the final digest with the one stored in the signing block
-    const digest_is_equal = std.mem.eql(u8, signing_entry.V2.items[0].signed_data.items[0].digests.items[0], &final_digest);
-    try stdout.writer().print("{}\n", .{std.fmt.fmtSliceHexUpper(signing_entry.V2.items[0].signed_data.items[0].digests.items[0])});
+    const digest_is_equal = std.mem.eql(u8, signing_entry.V2.items[0].signed_data.digests.items[0], &final_digest);
+    try stdout.writer().print("{}\n", .{std.fmt.fmtSliceHexUpper(signing_entry.V2.items[0].signed_data.digests.items[0])});
     try stdout.writer().print("{}\n", .{std.fmt.fmtSliceHexUpper(&final_digest)});
     if (digest_is_equal) {
         try stdout.writer().print("Digest Equal\n", .{});
