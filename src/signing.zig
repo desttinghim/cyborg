@@ -213,24 +213,29 @@ pub fn get_signing_blocks(alloc: std.mem.Allocator, stream_source: *std.io.Strea
 
     if (block_size != block_size_2) return error.BlockSizeMismatch;
 
+    const actual_size = block_size - 24;
+
+    // Read signing block into memory
+    // TODO: clean up memory properly
+    var buffer = try alloc.alloc(u8, actual_size);
+    errdefer alloc.free(buffer);
+
+    std.debug.assert(try stream_source.reader().read(buffer) == actual_size);
+
     // Create the hashmap and add all the signing blocks to it
 
     var id_value_pairs = std.AutoArrayHashMap(SigningEntry.Tag, OffsetSlice).init(alloc);
     errdefer id_value_pairs.deinit();
 
-    while (try stream_source.getPos() < block_size_offset) {
-        const size = try stream_source.reader().readInt(u64, .Little);
-        const id = @intToEnum(SigningEntry.Tag, try stream_source.reader().readInt(u32, .Little));
-        const pos = try stream_source.getPos();
-        if (pos + size - 4 > try stream_source.getEndPos()) return error.LengthTooLarge;
+    var index: usize = 0;
+    while (index < buffer.len) {
+        const size = std.mem.readInt(u64, buffer[index..][0..8], .Little);
+        std.debug.assert(size < buffer.len);
+        const id = @intToEnum(SigningEntry.Tag, std.mem.readInt(u32, buffer[index + 8 ..][0..4], .Little));
 
-        var buffer = try alloc.alloc(u8, size - 4);
-        errdefer alloc.free(buffer);
-        std.debug.assert(try stream_source.reader().read(buffer) == size - 4);
+        try id_value_pairs.put(id, .{ .position = block_start + index, .slice = buffer[index + 12 ..][0 .. size - 4] });
 
-        try id_value_pairs.put(id, .{ .position = pos, .slice = buffer });
-
-        // try stream_source.seekBy(@intCast(i64, size - 4));
+        index += size + 8;
     }
 
     return id_value_pairs;
@@ -378,29 +383,6 @@ pub fn parse_v2(alloc: std.mem.Allocator, stream_source: *std.io.StreamSource, s
         const unused_bits = public_key_chunk.slice[subject_pk.slice.start];
         _ = unused_bits;
         const subject_pk_bitstring = public_key_chunk.slice[subject_pk.slice.start + 1 ..];
-
-        const thing = try Element.parse(public_key_chunk.slice, subject_pk.slice.start + 1);
-        const thing2 = try Element.parse(public_key_chunk.slice, thing.slice.start);
-
-        std.debug.print(
-            \\ spki {}
-            \\ ai {}
-            \\ oid {}
-            \\ null {}
-            \\ spk {}
-            \\
-        , .{ subject_pk_info.slice.start, alg_id.slice.start, oid.slice.start, null_val.slice.start, subject_pk.slice.start });
-
-        // const thing = try Element.parse(subject_pk_bitstring, 0);
-
-        std.debug.print("{}\t{}\n", .{ thing.identifier.tag, thing2.identifier.tag });
-
-        // var buf: [1024]u8 = undefined;
-        // const base64 = std.base64.standard.Encoder.encode(&buf, public_key_chunk.slice);
-        // std.debug.print("{s}\n", .{(base64)});
-
-        // const hex = std.fmt.fmtSliceHexUpper(public_key_chunk.slice);
-        // std.debug.print("{s}\n", .{hex});
 
         const pk_components = try std.crypto.Certificate.rsa.PublicKey.parseDer(subject_pk_bitstring);
         const public_key = try std.crypto.Certificate.rsa.PublicKey.fromBytes(pk_components.exponent, pk_components.modulus, alloc);
