@@ -98,7 +98,7 @@ pub const SigningEntry = union(Tag) {
 
 /// Splits an APK into chunks for signing/verifying.
 pub fn splitAPK(ally: std.mem.Allocator, mmapped_file: []const u8, signing_pos: usize, central_directory_pos: usize, end_of_cd_pos: usize) ![][]const u8 {
-    const spos = signing_pos - 8;
+    const spos = signing_pos;
     const cdpos = central_directory_pos;
     const section1 = mmapped_file[0..spos]; // -8 to account for second signing block size field
     // const section2 = mmapped_file[signing_pos..central_directory_pos];
@@ -165,7 +165,7 @@ signing_block: []const u8,
 
 pub fn update_eocd_directory_offset(signing: Signing, mmapped_file: []u8) void {
     std.debug.assert(signing.signing_block_offset < std.math.maxInt(u32));
-    const pos = @intCast(u32, signing.signing_block_offset) - 8;
+    const pos = @intCast(u32, signing.signing_block_offset);
     const eocd = mmapped_file[signing.end_of_central_directory_offset..];
     std.mem.writeInt(u32, eocd[16..20], pos, .Little);
 }
@@ -230,11 +230,9 @@ fn get_signing_block_offset(stream_source: *std.io.StreamSource, directory_offse
 
     const block_size = try stream_source.reader().readInt(u64, .Little);
 
-    const block_start = directory_offset - block_size;
+    const block_start = directory_offset - block_size - 8;
 
-    const block_size_offset_2 = block_start - 8;
-
-    try stream_source.seekTo(block_size_offset_2);
+    try stream_source.seekTo(block_start);
 
     const block_size_2 = try stream_source.reader().readInt(u64, .Little);
 
@@ -276,7 +274,7 @@ pub fn verify() void {}
 /// # Return
 /// Returns a slice corresponding to the signing entry within the signing block
 pub fn locate_entry(signing: Signing, tag: SigningEntry.Tag) ![]const u8 {
-    var index: usize = 0;
+    var index: usize = 8; // skip the signing block size
     while (index < signing.signing_block.len) {
         const size = std.mem.readInt(u64, signing.signing_block[index..][0..8], .Little);
         if (size > signing.signing_block.len) return error.SigningEntryLengthOutOfBounds;
