@@ -98,9 +98,11 @@ pub const SigningEntry = union(Tag) {
 
 /// Splits an APK into chunks for signing/verifying.
 pub fn splitAPK(ally: std.mem.Allocator, mmapped_file: []const u8, signing_pos: usize, central_directory_pos: usize, end_of_cd_pos: usize) ![][]const u8 {
-    const section1 = mmapped_file[0 .. signing_pos - 8]; // -8 to account for second signing block size field
+    const spos = signing_pos - 8;
+    const cdpos = central_directory_pos;
+    const section1 = mmapped_file[0..spos]; // -8 to account for second signing block size field
     // const section2 = mmapped_file[signing_pos..central_directory_pos];
-    const section3 = mmapped_file[central_directory_pos..end_of_cd_pos];
+    const section3 = mmapped_file[cdpos..end_of_cd_pos];
     const section4 = mmapped_file[end_of_cd_pos..];
 
     std.debug.assert(section1.len != 0);
@@ -108,11 +110,11 @@ pub fn splitAPK(ally: std.mem.Allocator, mmapped_file: []const u8, signing_pos: 
     std.debug.assert(section3.len != 0);
     std.debug.assert(section4.len != 0);
 
-    const MB = 2 << 20;
-    const section1_count = ((section1.len - 1) / MB) + 1;
-    // const section2_count = ((section2.len - 1) / MB) + 1;
-    const section3_count = ((section3.len - 1) / MB) + 1;
-    const section4_count = ((section4.len - 1) / MB) + 1;
+    const MB = 1024 * 1024; // 2 << 20;
+    const section1_count = try std.math.divCeil(usize, section1.len, MB);
+    // const section2_count = std.math.divCeil(usize, section2.len, MB);
+    const section3_count = try std.math.divCeil(usize, section3.len, MB);
+    const section4_count = try std.math.divCeil(usize, section4.len, MB);
 
     const total_count = section1_count + section3_count + section4_count;
 
@@ -163,7 +165,7 @@ signing_block: []const u8,
 
 pub fn update_eocd_directory_offset(signing: Signing, mmapped_file: []u8) void {
     std.debug.assert(signing.signing_block_offset < std.math.maxInt(u32));
-    const pos = @intCast(u32, signing.signing_block_offset);
+    const pos = @intCast(u32, signing.signing_block_offset) - 8;
     const eocd = mmapped_file[signing.end_of_central_directory_offset..];
     std.mem.writeInt(u32, eocd[16..20], pos, .Little);
 }

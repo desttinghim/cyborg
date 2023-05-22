@@ -303,7 +303,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     const Sha256 = std.crypto.hash.sha2.Sha256;
 
     // Allocate enough memory to store all the digests
-    const digest_mem = try alloc.alloc([Sha256.digest_length]u8, chunks.len);
+    const digest_mem = try alloc.alloc(u8, Sha256.digest_length * chunks.len);
     defer alloc.free(digest_mem);
 
     // Loop over every chunk and compute its digest
@@ -318,21 +318,18 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
         hash.update(&size_buf); // Size in bytes, le u32
         hash.update(chunk); // Chunk contents
 
-        digest_mem[i] = hash.finalResult();
+        hash.final(digest_mem[i * Sha256.digest_length ..][0..Sha256.digest_length]);
     }
 
     // Compute the digest over all chunks
     var hash = Sha256.init(.{});
 
     var size_buf: [4]u8 = undefined;
-    var size = @intCast(u32, chunks.len);
-    std.mem.writeIntSlice(u32, &size_buf, size, .Little);
+    std.mem.writeIntSlice(u32, &size_buf, @intCast(u32, chunks.len), .Little);
 
     hash.update(&.{0x5a}); // Magic value byte for final digest
     hash.update(&size_buf);
-    for (digest_mem) |digest| {
-        hash.update(&digest);
-    }
+    hash.update(digest_mem);
     const final_digest = hash.finalResult();
 
     // Compare the final digest with the one stored in the signing block
