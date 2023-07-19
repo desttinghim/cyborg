@@ -407,16 +407,16 @@ pub const Dex = struct {
     /// the header
     header: HeaderItem,
     /// string identifiers list. These are identifiers for all the strings used by this file, either for internal naming (e.g. type descriptors) or as constant objects referred to by code. This list must be sorted by string contents, using UTF-16 code point values (not in a locale-sensitive manner), and it must not contain any duplicate entries.
-    string_ids: []StringIdItem,
-    type_ids: []TypeIdItem,
-    proto_ids: []ProtoIdItem,
-    field_ids: []FieldIdItem,
-    method_ids: []MethodIdItem,
-    class_defs: []ClassDefItem,
-    call_site_ids: []CallSiteIdItem,
-    method_handles: []MethodHandleItem,
-    data: []u8,
-    link_data: []u8,
+    string_ids: std.ArrayListUnmanaged(StringIdItem),
+    type_ids: std.ArrayListUnmanaged(TypeIdItem),
+    proto_ids: std.ArrayListUnmanaged(ProtoIdItem),
+    field_ids: std.ArrayListUnmanaged(FieldIdItem),
+    method_ids: std.ArrayListUnmanaged(MethodIdItem),
+    class_defs: std.ArrayListUnmanaged(ClassDefItem),
+    call_site_ids: std.ArrayListUnamanged(CallSiteIdItem),
+    method_handles: std.ArrayListUnmanaged(MethodHandleItem),
+    data: std.ArrayListUnmanaged(u8),
+    link_data: std.ArrayListUnmanaged(u8),
     map_list: MapList,
 
     pub fn readAlloc(seek: anytype, reader: anytype, allocator: std.mem.Allocator) !Dex {
