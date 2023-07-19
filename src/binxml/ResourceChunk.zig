@@ -35,7 +35,7 @@ pub const Header = struct {
 
     pub fn read(reader: anytype) !Header {
         return Header{
-            .type = @intToEnum(Type, try reader.readInt(u16, .Little)),
+            .type = @as(Type, @enumFromInt(try reader.readInt(u16, .Little))),
             .header_size = try reader.readInt(u16, .Little),
             .size = try reader.readInt(u32, .Little),
         };
@@ -81,7 +81,7 @@ pub const Header = struct {
 
 pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, alloc: std.mem.Allocator) !Chunk {
     var header = Header{
-        .type = @intToEnum(Type, try reader.readInt(u16, .Little)),
+        .type = @as(Type, @enumFromInt(try reader.readInt(u16, .Little))),
         .header_size = try reader.readInt(u16, .Little),
         .size = try reader.readInt(u32, .Little),
     };

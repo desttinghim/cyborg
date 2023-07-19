@@ -225,17 +225,17 @@ const Config = extern struct {
 
         config.size = try reader.readInt(u32, .Little);
         std.debug.assert(config.size == @sizeOf(Config));
-        config.imsi = @bitCast(Imsi, try reader.readInt(u32, .Little));
-        config.locale = @bitCast(Locale, try reader.readInt(u32, .Little));
-        config.screen_type = @bitCast(ScreenType, try reader.readInt(u32, .Little));
-        config.input = @bitCast(Input, try reader.readInt(u32, .Little));
-        config.screen_size = @bitCast(ScreenSize, try reader.readInt(u32, .Little));
-        config.version = @bitCast(Version, try reader.readInt(u32, .Little));
-        config.screen_config = @bitCast(ScreenConfig, try reader.readInt(u32, .Little));
-        config.screen_size_dp = @bitCast(ScreenSizeDp, try reader.readInt(u32, .Little));
+        config.imsi = @as(Imsi, @bitCast(try reader.readInt(u32, .Little)));
+        config.locale = @as(Locale, @bitCast(try reader.readInt(u32, .Little)));
+        config.screen_type = @as(ScreenType, @bitCast(try reader.readInt(u32, .Little)));
+        config.input = @as(Input, @bitCast(try reader.readInt(u32, .Little)));
+        config.screen_size = @as(ScreenSize, @bitCast(try reader.readInt(u32, .Little)));
+        config.version = @as(Version, @bitCast(try reader.readInt(u32, .Little)));
+        config.screen_config = @as(ScreenConfig, @bitCast(try reader.readInt(u32, .Little)));
+        config.screen_size_dp = @as(ScreenSizeDp, @bitCast(try reader.readInt(u32, .Little)));
         _ = try reader.read(&config.locale_script);
         _ = try reader.read(&config.locale_version);
-        config.screen_config2 = @bitCast(ScreenConfig2, try reader.readInt(u32, .Little));
+        config.screen_config2 = @as(ScreenConfig2, @bitCast(try reader.readInt(u32, .Little)));
 
         return config;
     }

@@ -36,12 +36,12 @@ pub fn write(document: Document, seek: anytype, writer: anytype) !Document {
     // Write the string offsets
     for (document.string_pool, 0..) |string, i| {
         // Add index to account for the length values, and then multiply by 2 to get the byte offset
-        try writer.writeInt(u32, @intCast(u32, (string.len + i) * 2), .Little);
+        try writer.writeInt(u32, @as(u32, @intCast((string.len + i) * 2)), .Little);
     }
 
     // Write the strings
     for (document.string_pool) |string| {
-        try writer.writeInt(u16, @intCast(u16, string.len), .Little);
+        try writer.writeInt(u16, @as(u16, @intCast(string.len)), .Little);
         for (string) |char| {
             try writer.writeInt(u16, char, .Little);
         }

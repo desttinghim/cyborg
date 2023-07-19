@@ -30,7 +30,7 @@ pub const Ref = struct {
 };
 
 pub fn ref(index: usize) Ref {
-    return .{ .index = @intCast(u32, index) };
+    return .{ .index = @as(u32, @intCast(index)) };
 }
 
 pub fn get_null_ref(self: StringPool) Ref {
@@ -58,7 +58,7 @@ const Header = struct {
             .header = chunk_header,
             .string_count = try reader.readInt(u32, .Little),
             .style_count = try reader.readInt(u32, .Little),
-            .flags = @bitCast(Flags, try reader.readInt(u32, .Little)),
+            .flags = @as(Flags, @bitCast(try reader.readInt(u32, .Little))),
             .strings_start = try reader.readInt(u32, .Little),
             .styles_start = try reader.readInt(u32, .Little),
         };
@@ -68,7 +68,7 @@ const Header = struct {
         try ResourceChunk.Header.write(writer);
         try writer.writeInt(u32, header.string_count, .Little);
         try writer.writeInt(u32, header.style_count, .Little);
-        try writer.writeInt(u32, @bitCast(u32, header.flags), .Little);
+        try writer.writeInt(u32, @as(u32, @bitCast(header.flags)), .Little);
         try writer.writeInt(u32, header.strings_start, .Little);
         try writer.writeInt(u32, header.styles_start, .Little);
     }
@@ -86,7 +86,7 @@ pub fn insert(self: *StringPool, allocator: std.mem.Allocator, string: []const u
     for (self.data.Utf8.slices.items, 0..) |span, i| {
         var str = self.data.Utf8.pool.items[span.start..span.end];
         if (std.mem.eql(u8, str, string)) {
-            return Ref{ .index = @intCast(u32, i) };
+            return Ref{ .index = @as(u32, @intCast(i)) };
         }
     }
 
@@ -97,7 +97,7 @@ pub fn insert(self: *StringPool, allocator: std.mem.Allocator, string: []const u
     try self.data.Utf8.pool.appendSlice(allocator, string);
     const index = self.data.Utf8.slices.items.len;
     try self.data.Utf8.slices.append(allocator, span);
-    return Ref{ .index = @intCast(u32, index) };
+    return Ref{ .index = @as(u32, @intCast(index)) };
 }
 
 pub fn getUtf16(self: StringPool, refe: Ref) ?[]const u16 {

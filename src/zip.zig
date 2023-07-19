@@ -17,7 +17,7 @@ pub const GeneralFlags = packed struct(u16) {
     _reserved2: u2,
 
     pub fn read(reader: anytype) !GeneralFlags {
-        return @bitCast(GeneralFlags, try reader.readInt(u16, .Little));
+        return @as(GeneralFlags, @bitCast(try reader.readInt(u16, .Little)));
     }
 };
 
@@ -55,7 +55,7 @@ pub const DosTime = packed struct(u16) {
     hour: u6,
 
     pub fn read(reader: anytype) !DosTime {
-        return @bitCast(DosTime, try reader.readInt(u16, .Little));
+        return @as(DosTime, @bitCast(try reader.readInt(u16, .Little)));
     }
 };
 
@@ -65,7 +65,7 @@ pub const DosDate = packed struct(u16) {
     years: u8,
 
     pub fn read(reader: anytype) !DosDate {
-        return @bitCast(DosDate, try reader.readInt(u16, .Little));
+        return @as(DosDate, @bitCast(try reader.readInt(u16, .Little)));
     }
 };
 
@@ -133,7 +133,7 @@ pub const Version = packed struct(u16) {
     system: System,
 
     pub fn read(reader: anytype) !Version {
-        return @bitCast(Version, try reader.readInt(u16, .Little));
+        return @as(Version, @bitCast(try reader.readInt(u16, .Little)));
     }
 };
 
@@ -144,7 +144,7 @@ pub const InternalFileAttr = packed struct(u16) {
     _unused: u13,
 
     pub fn read(reader: anytype) !InternalFileAttr {
-        return @bitCast(InternalFileAttr, try reader.readInt(u16, .Little));
+        return @as(InternalFileAttr, @bitCast(try reader.readInt(u16, .Little)));
     }
 };
 

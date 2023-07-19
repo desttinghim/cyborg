@@ -124,18 +124,18 @@ pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
     // Padding, should always be 0
     const res0 = try reader.readInt(u8, .Little);
     _ = res0;
-    const datatype = @intToEnum(DataType, try reader.readInt(u8, .Little));
+    const datatype = @as(DataType, @enumFromInt(try reader.readInt(u8, .Little)));
     // const raw_data = try reader.readInt(u32, .Little);
     const data: Data = switch (datatype) {
-        .Null => .{ .Null = @intToEnum(NullType, try reader.readInt(u32, .Little)) },
+        .Null => .{ .Null = @as(NullType, @enumFromInt(try reader.readInt(u32, .Little))) },
         .Reference => .{ .Reference = try reader.readInt(u32, .Little) },
         .Attribute => .{ .Attribute = try reader.readInt(u32, .Little) },
         .String => .{ .String = StringPool.Ref{ .index = try reader.readInt(u32, .Little) } },
-        .Float => .{ .Float = @bitCast(f32, try reader.readInt(u32, .Little)) },
+        .Float => .{ .Float = @as(f32, @bitCast(try reader.readInt(u32, .Little))) },
         .Dimension => .{ .Dimension = dimension: {
             const description = try reader.readByte();
-            var unit = @intToEnum(DimensionUnit, @truncate(u4, description));
-            var radix = @intToEnum(Radix, @truncate(u4, description >> 4));
+            var unit = @as(DimensionUnit, @enumFromInt(@as(u4, @truncate(description))));
+            var radix = @as(Radix, @enumFromInt(@as(u4, @truncate(description >> 4))));
             var value = try reader.readInt(i24, .Little);
             break :dimension .{
                 .unit = unit,
@@ -145,8 +145,8 @@ pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
         } },
         .Fraction => .{ .Fraction = fraction: {
             const description = try reader.readByte();
-            var unit = @intToEnum(FractionUnit, @truncate(u4, description));
-            var radix = @intToEnum(Radix, @truncate(u4, description >> 4));
+            var unit = @as(FractionUnit, @enumFromInt(@as(u4, @truncate(description))));
+            var radix = @as(Radix, @enumFromInt(@as(u4, @truncate(description >> 4))));
             var value = try reader.readInt(i24, .Little);
             break :fraction .{
                 .unit = unit,
@@ -177,9 +177,9 @@ pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
 }
 
 pub fn write(value: Value, writer: anytype) !void {
-    try writer.writeInt(u16, @enumToInt(value.size), .Little);
+    try writer.writeInt(u16, @intFromEnum(value.size), .Little);
     try writer.writeInt(u8, value.res0, .Little);
-    try writer.writeInt(u8, @enumToInt(value.datatype), .Little);
+    try writer.writeInt(u8, @intFromEnum(value.datatype), .Little);
     try writer.writeInt(u32, value.data, .Little);
 }
 

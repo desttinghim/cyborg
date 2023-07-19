@@ -110,7 +110,7 @@ pub fn print_node(stdout: std.fs.File, reader: c.xmlTextReaderPtr) !void {
     var t = c.xmlTextReaderNodeType(reader);
     try stdout.writer().print("{:<5} {s: <25} {s: <20} {:<10} {:<10}", .{
         c.xmlTextReaderDepth(reader),
-        @tagName(@intToEnum(XMLReaderType, t)),
+        @tagName(@as(XMLReaderType, @enumFromInt(t))),
         name,
         c.xmlTextReaderIsEmptyElement(reader),
         c.xmlTextReaderHasValue(reader),
@@ -142,8 +142,8 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     var ret = c.xmlTextReaderRead(reader);
     while (ret == 1) : (ret = c.xmlTextReaderRead(reader)) {
         // try print_node(stdout, reader);
-        var node_type = @intToEnum(XMLReaderType, c.xmlTextReaderNodeType(reader));
-        const line_number = @intCast(u32, c.xmlTextReaderGetParserLineNumber(reader));
+        var node_type = @as(XMLReaderType, @enumFromInt(c.xmlTextReaderNodeType(reader)));
+        const line_number = @as(u32, @intCast(c.xmlTextReaderGetParserLineNumber(reader)));
         try attributes.resize(0); // clear list
         switch (node_type) {
             .Element => {
@@ -152,9 +152,9 @@ pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
                 const is_empty = c.xmlTextReaderIsEmptyElement(reader) == 1;
 
                 if (c.xmlTextReaderHasAttributes(reader) == 1) {
-                    const count = @intCast(usize, c.xmlTextReaderAttributeCount(reader));
+                    const count = @as(usize, @intCast(c.xmlTextReaderAttributeCount(reader)));
                     for (0..count) |i| {
-                        if (c.xmlTextReaderMoveToAttributeNo(reader, @intCast(c_int, i)) != 1) continue;
+                        if (c.xmlTextReaderMoveToAttributeNo(reader, @as(c_int, @intCast(i))) != 1) continue;
                         const attr_ns = if (c.xmlTextReaderConstNamespaceUri(reader)) |ns| std.mem.span(ns) else null;
                         const attr_name = std.mem.span(c.xmlTextReaderConstLocalName(reader) orelse return error.MissingAttributeName);
                         const value = std.mem.span(c.xmlTextReaderConstValue(reader) orelse return error.MissingAttributeValue);
@@ -311,7 +311,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
         var hash = Sha256.init(.{});
 
         var size_buf: [4]u8 = undefined;
-        var size = @intCast(u32, chunk.len);
+        var size = @as(u32, @intCast(chunk.len));
         std.mem.writeIntSlice(u32, &size_buf, size, .Little);
 
         hash.update(&.{0xa5}); // Magic value byte
@@ -325,7 +325,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     var hash = Sha256.init(.{});
 
     var size_buf: [4]u8 = undefined;
-    std.mem.writeIntSlice(u32, &size_buf, @intCast(u32, chunks.len), .Little);
+    std.mem.writeIntSlice(u32, &size_buf, @as(u32, @intCast(chunks.len)), .Little);
 
     hash.update(&.{0x5a}); // Magic value byte for final digest
     hash.update(&size_buf);
@@ -479,7 +479,7 @@ fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
             .StringPool => |string_pool| {
                 try std.fmt.format(stdout, "String Pool chunk:\n", .{});
                 for (0..string_pool.get_len()) |index| {
-                    const i = @intCast(u32, index);
+                    const i = @as(u32, @intCast(index));
                     if (string_pool.getUtf16Raw(i)) |string| {
                         try std.fmt.format(stdout.writer(), "{}: {}\n", .{ i, std.unicode.fmtUtf16le(string) });
                     } else if (string_pool.getUtf8Raw(i)) |string| {

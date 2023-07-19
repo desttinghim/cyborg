@@ -917,7 +917,7 @@ const ClassDefItem = struct {
     pub fn read(reader: anytype) !@This() {
         return @This(){
             .class_idx = try reader.readInt(u32, .Little),
-            .access_flags = @bitCast(AccessFlags, try reader.readInt(u32, .Little)),
+            .access_flags = @as(AccessFlags, @bitCast(try reader.readInt(u32, .Little))),
             .superclass_idx = try reader.readInt(u32, .Little),
             .interfaces_off = try reader.readInt(u32, .Little),
             .source_file_idx = try reader.readInt(u32, .Little),
