@@ -1,5 +1,3 @@
-const std = @import("std");
-
 pub fn main() !void {
     // Setup necessary global state
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -55,14 +53,45 @@ pub fn main() !void {
     defer std.os.munmap(file_map);
 
     var line_iter = std.mem.tokenizeSequence(u8, file_map, "\n");
-    var instructions = try std.ArrayListUnmanaged(u16).initCapacity(alloc, std.math.maxInt(u8));
+    var labels = std.StringHashMap(usize).init(alloc);
+    var instructions = try std.ArrayListUnmanaged(u8).initCapacity(alloc, std.math.maxInt(u16));
+    const writer = instructions.writer(alloc);
 
     while (line_iter.next()) |line| {
         std.debug.print("{s}\n", .{line});
         var tok_iter = std.mem.tokenizeSequence(u8, line, " ");
         var token = tok_iter.next() orelse continue;
         if (std.mem.eql(u8, ";", token)) continue;
-        if (std.mem.eql(u8, "nop", token)) instructions.appendAssumeCapacity(0x0010);
+
+        const instruction_opt = std.meta.stringToEnum(dex.Ops, token);
+        if (instruction_opt) |instruction| {
+            switch (instruction) {
+                else => |tag| {
+                    const int = @intFromEnum(tag);
+                    // const int_slice = std.mem.slice(int);
+                    try writer.writeInt(u16, int, .Little);
+                    // instructions.appendSliceAssumeCapacity(int_slice);
+                },
+            }
+        } else if (token[token.len - 1] == ':') {
+            try labels.putNoClobber(token[0 .. token.len - 1], instructions.items.len);
+        } else {
+            switch (token[0]) {
+                '.' => {
+                    std.debug.print("directive {s}\n", .{token[1..]});
+                },
+                '"' => {
+                    const string = if (std.mem.indexOfScalar(u8, token[1..], '"') != null) token else string: {
+                        const index = std.mem.indexOfScalar(u8, tok_iter.rest(), '"') orelse return error.UnclosedQuote;
+                        tok_iter.index += index;
+                        break :string token.ptr[1 .. token.len + index];
+                    };
+                    std.debug.print("string {s}\n", .{string});
+                },
+                ';' => continue, // skip the line
+                else => return error.InvalidSyntax,
+            }
+        }
     }
 
     for (instructions.items, 0..) |instruction, i| {
@@ -97,3 +126,6 @@ fn parse_file_name(infile_path: []const u8, expected_extension: []const u8) !Par
         .extension = extension,
     };
 }
+
+const std = @import("std");
+const dex = @import("dex.zig");
