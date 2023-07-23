@@ -15,7 +15,6 @@ pub fn main() !void {
     }
 
     const stdout = std.io.getStdOut();
-    _ = stdout;
 
     // Parse the arguments
     const args = try std.process.argsAlloc(alloc);
@@ -52,50 +51,127 @@ pub fn main() !void {
     const file_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, std.os.MAP.PRIVATE, file.handle, 0);
     defer std.os.munmap(file_map);
 
-    var line_iter = std.mem.tokenizeSequence(u8, file_map, "\n");
+    const TokenizeState = enum {
+        Whitespace,
+        Comment,
+        String,
+        Literal,
+        Reference,
+        Label,
+        Instruction,
+        Register,
+    };
+
+    const Tag = enum {
+        String,
+        Literal,
+        Reference,
+        Label,
+        Instruction,
+        Register,
+    };
+
     var labels = std.StringHashMap(usize).init(alloc);
-    var instructions = try std.ArrayListUnmanaged(u8).initCapacity(alloc, std.math.maxInt(u16));
-    const writer = instructions.writer(alloc);
+    _ = labels;
+    var tokenize_state: TokenizeState = .Whitespace;
+    var token_indices = try std.ArrayListUnmanaged(u32).initCapacity(alloc, std.math.maxInt(u16));
+    var token_tags = try std.ArrayListUnmanaged(Tag).initCapacity(alloc, std.math.maxInt(u16));
+    var token_start: u32 = 0;
+    var comment_level: u8 = 0;
 
-    while (line_iter.next()) |line| {
-        std.debug.print("{s}\n", .{line});
-        var tok_iter = std.mem.tokenizeSequence(u8, line, " ");
-        var token = tok_iter.next() orelse continue;
-        if (std.mem.eql(u8, ";", token)) continue;
+    for (file_map, 0..) |byte, index| {
+        const last_state = tokenize_state;
+        switch (tokenize_state) {
+            .Whitespace => {
+                switch (byte) {
+                    ' ', '\n', '\t' => continue,
+                    '"' => tokenize_state = .String,
+                    '(' => tokenize_state = .Comment,
+                    '#' => tokenize_state = .Literal,
+                    '@' => tokenize_state = .Label,
+                    '.' => tokenize_state = .Reference,
+                    '$' => tokenize_state = .Register,
+                    else => tokenize_state = .Instruction,
+                }
+            },
+            .Literal, .Reference, .Label, .Instruction, .Register => {
+                switch (byte) {
+                    ' ', '\n', '\t' => tokenize_state = .Whitespace,
+                    ';' => tokenize_state = .Comment,
+                    else => continue,
+                }
+            },
+            .String => {
+                switch (byte) {
+                    '"' => tokenize_state = .Whitespace,
+                    else => continue,
+                }
+            },
+            .Comment => { // Supports nesting up to 256 levels
+                switch (byte) {
+                    '(' => comment_level += 1,
+                    ')' => {
+                        if (comment_level == 0) {
+                            tokenize_state = .Whitespace;
+                        } else {
+                            comment_level -= 1;
+                        }
+                    },
+                    else => continue,
+                }
+            },
+        }
 
-        const instruction_opt = std.meta.stringToEnum(dex.Ops, token);
-        if (instruction_opt) |instruction| {
-            switch (instruction) {
-                else => |tag| {
-                    const int = @intFromEnum(tag);
-                    // const int_slice = std.mem.slice(int);
-                    try writer.writeInt(u16, int, .Little);
-                    // instructions.appendSliceAssumeCapacity(int_slice);
+        if (tokenize_state != last_state) {
+            switch (last_state) {
+                .Whitespace, .Comment => {}, // ignore
+                .String => {
+                    token_indices.appendAssumeCapacity(token_start + 1);
+                    token_tags.appendAssumeCapacity(.String);
+                },
+                .Literal => {
+                    token_indices.appendAssumeCapacity(token_start);
+                    token_tags.appendAssumeCapacity(.Literal);
+                },
+                .Reference => {
+                    token_indices.appendAssumeCapacity(token_start);
+                    token_tags.appendAssumeCapacity(.Reference);
+                },
+                .Label => {
+                    token_indices.appendAssumeCapacity(token_start + 1);
+                    token_tags.appendAssumeCapacity(.Label);
+                },
+                .Instruction => {
+                    token_indices.appendAssumeCapacity(token_start);
+                    token_tags.appendAssumeCapacity(.Instruction);
+                },
+                .Register => {
+                    token_indices.appendAssumeCapacity(token_start);
+                    token_tags.appendAssumeCapacity(.Register);
                 },
             }
-        } else if (token[token.len - 1] == ':') {
-            try labels.putNoClobber(token[0 .. token.len - 1], instructions.items.len);
-        } else {
-            switch (token[0]) {
-                '.' => {
-                    std.debug.print("directive {s}\n", .{token[1..]});
-                },
-                '"' => {
-                    const string = if (std.mem.indexOfScalar(u8, token[1..], '"') != null) token else string: {
-                        const index = std.mem.indexOfScalar(u8, tok_iter.rest(), '"') orelse return error.UnclosedQuote;
-                        tok_iter.index += index;
-                        break :string token.ptr[1 .. token.len + index];
-                    };
-                    std.debug.print("string {s}\n", .{string});
-                },
-                ';' => continue, // skip the line
-                else => return error.InvalidSyntax,
-            }
+            token_start = @intCast(index);
         }
     }
 
-    for (instructions.items, 0..) |instruction, i| {
-        std.debug.print("{x:0>4}\t{x:0>4}\n", .{ i, instruction });
+    for (token_indices.items, token_tags.items) |index, tag| {
+        var end = index + 1;
+        var char: u8 = file_map[end];
+        while (true) : (char = file_map[end]) {
+            const is_whitespace = char == ' ' or char == '\n' or char == '\t';
+            const is_end_string = char == '"';
+            const is_end_label = char == ':';
+            if (tag == .String) {
+                if (is_end_string) break;
+            } else if (tag == .Label) {
+                if (is_end_label or is_whitespace) break;
+            } else if (is_whitespace) {
+                break;
+            }
+            end += 1;
+        }
+        const string = file_map[index..end];
+        try stdout.writer().print("{s}\t{s}\n", .{ @tagName(tag), string });
     }
 }
 
