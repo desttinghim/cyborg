@@ -424,6 +424,11 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 
     for (classes.map_list.list) |list_item| {
         try std.fmt.format(stdout.writer(), "{}\n", .{list_item});
+        if (list_item.type == .code_item) {
+            try file.seekTo(list_item.offset);
+            const code_item = try dex.CodeItem.read(file.reader(), alloc);
+            try std.fmt.format(stdout.writer(), "code_item: {}\n", .{code_item});
+        }
     }
 
     for (classes.string_ids.items, 0..) |id, i| {

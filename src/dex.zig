@@ -388,20 +388,6 @@ const sleb128 = i32;
 const uleb128 = u32;
 const uleb128p1 = u33;
 
-/// Little-Endian Base 128
-/// DEX only uses values up to 32-bit
-const Leb128 = struct {
-    pub fn readS128(reader: anytype) !sleb128 {
-        _ = reader;
-    }
-    pub fn readU128(reader: anytype) !uleb128 {
-        _ = reader;
-    }
-    pub fn readU128p1(reader: anytype) !uleb128p1 {
-        _ = reader;
-    }
-};
-
 /// DEX file layout
 pub const Dex = struct {
     /// the header
@@ -468,6 +454,12 @@ pub const Dex = struct {
         }
 
         // TODO?
+        // Read the call site ids list
+        // NOTE: The call_site list does NOT have an offset specified in the header
+        // dex.call_site_ids = try std.ArrayListUnmanaged(CallSiteIdItem).initCapacity(allocator, dex.header.call_site_ids_size);
+        // for (0..dex.header.class_defs_size) |_| {
+        //     dex.call_site_ids.appendAssumeCapacity(try CallSiteIdItem.read(reader));
+        // }
         // dex.call_site_ids = ;
         // dex.method_handles = ;
 
@@ -1030,7 +1022,7 @@ const TypeItem = struct {
     }
 };
 
-const CodeItem = struct {
+pub const CodeItem = struct {
     registers_size: u16,
     ins_size: u16,
     outs_size: u16,
@@ -1038,31 +1030,120 @@ const CodeItem = struct {
     debug_info_off: u32,
     insns_size: u32,
     insns: []u16,
-    padding: ?u16,
     tries: ?[]TryItem,
     handlers: ?EncodedCatchHandlerList,
+
+    pub fn read(reader: anytype, allocator: std.mem.Allocator) !CodeItem {
+        const registers_size = try reader.readInt(u16, .little);
+        const ins_size = try reader.readInt(u16, .little);
+        const outs_size = try reader.readInt(u16, .little);
+        const tries_size = try reader.readInt(u16, .little);
+        const debug_info_off = try reader.readInt(u32, .little);
+        const insns_size = try reader.readInt(u32, .little);
+        const insns = try allocator.alloc(u16, insns_size);
+        for (insns) |*ins| {
+            ins.* = try reader.readInt(u16, .little);
+        }
+        if (insns_size != 0 and insns_size % 2 != 0) try reader.skipBytes(2, .{});
+        const tries = tries: {
+            if (tries_size != 0) {
+                const tries = try allocator.alloc(TryItem, tries_size);
+                for (tries) |*t| {
+                    t.* = try TryItem.read(reader);
+                }
+                break :tries tries;
+            } else {
+                break :tries null;
+            }
+        };
+        const handlers = handlers: {
+            if (tries_size != 0) {
+                break :handlers try EncodedCatchHandlerList.read(reader, allocator);
+            } else {
+                break :handlers null;
+            }
+        };
+
+        return .{
+            .registers_size = registers_size,
+            .ins_size = ins_size,
+            .outs_size = outs_size,
+            .tries_size = tries_size,
+            .debug_info_off = debug_info_off,
+            .insns_size = insns_size,
+            .insns = insns,
+            .tries = tries,
+            .handlers = handlers,
+        };
+    }
 };
 
 const TryItem = struct {
     start_addr: u32,
     insn_count: u16,
     handler_off: u16,
+
+    pub fn read(reader: anytype) !TryItem {
+        const start_addr = try reader.readInt(u32, .little);
+        const insn_count = try reader.readInt(u16, .little);
+        const handler_off = try reader.readInt(u16, .little);
+        return .{
+            .start_addr = start_addr,
+            .insn_count = insn_count,
+            .handler_off = handler_off,
+        };
+    }
 };
 
 const EncodedCatchHandlerList = struct {
     size: uleb128,
     list: []EncodedCatchHandler,
+
+    pub fn read(reader: anytype, allocator: std.mem.Allocator) !EncodedCatchHandlerList {
+        const size = try std.leb.readULEB128(u32, reader);
+        const list = try allocator.alloc(EncodedCatchHandler, size);
+        for (list) |*handler| {
+            handler.* = try EncodedCatchHandler.read(reader, allocator);
+        }
+        return .{
+            .size = size,
+            .list = list,
+        };
+    }
 };
 
 const EncodedCatchHandler = struct {
     size: sleb128,
-    handlers: EncodedTypeAddrPair,
+    handlers: []EncodedTypeAddrPair,
     catch_all_addr: ?uleb128,
+
+    pub fn read(reader: anytype, allocator: std.mem.Allocator) !EncodedCatchHandler {
+        const size = try std.leb.readILEB128(sleb128, reader);
+        const type_addr_pairs = try allocator.alloc(EncodedTypeAddrPair, @intCast(if (size < 0) -size else size));
+        for (type_addr_pairs) |*pair| {
+            pair.* = try EncodedTypeAddrPair.read(reader);
+        }
+        const catch_all_addr = if (size < 0) try std.leb.readULEB128(u32, reader) else null;
+        return .{
+            .size = size,
+            .handlers = type_addr_pairs,
+            .catch_all_addr = catch_all_addr,
+        };
+    }
 };
 
 const EncodedTypeAddrPair = struct {
     type_idx: uleb128,
     addr: uleb128,
+
+    pub fn read(reader: anytype) !EncodedTypeAddrPair {
+        const t = try std.leb.readULEB128(u32, reader);
+        const addr = try std.leb.readULEB128(u32, reader);
+        return .{
+            .type_idx = t,
+            .addr = addr,
+        };
+    }
 };
 
 const DebugInfoItem = struct {
