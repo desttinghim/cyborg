@@ -35,9 +35,9 @@ pub const Header = struct {
 
     pub fn read(reader: anytype) !Header {
         return Header{
-            .type = @as(Type, @enumFromInt(try reader.readInt(u16, .Little))),
-            .header_size = try reader.readInt(u16, .Little),
-            .size = try reader.readInt(u32, .Little),
+            .type = @as(Type, @enumFromInt(try reader.readInt(u16, .little))),
+            .header_size = try reader.readInt(u16, .little),
+            .size = try reader.readInt(u32, .little),
         };
     }
 
@@ -81,9 +81,9 @@ pub const Header = struct {
 
 pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, alloc: std.mem.Allocator) !Chunk {
     var header = Header{
-        .type = @as(Type, @enumFromInt(try reader.readInt(u16, .Little))),
-        .header_size = try reader.readInt(u16, .Little),
-        .size = try reader.readInt(u32, .Little),
+        .type = @as(Type, @enumFromInt(try reader.readInt(u16, .little))),
+        .header_size = try reader.readInt(u16, .little),
+        .size = try reader.readInt(u32, .little),
     };
     const chunk: Chunk = switch (header.type) {
         // inline .Xml, .Table, .StringPool => |tag| {
@@ -100,9 +100,9 @@ pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, alloc: std.mem.Allo
 
 // TODO:
 // pub fn write(chunk: Chunk, writer: anytype) !void {
-//     try writer.writeInt(u16, @enumToInt(header.type), .Little);
-//     try writer.writeInt(u16, @enumToInt(header.header_size), .Little);
-//     try writer.writeInt(u32, @enumToInt(header.size), .Little);
+//     try writer.writeInt(u16, @enumToInt(header.type), .little);
+//     try writer.writeInt(u16, @enumToInt(header.header_size), .little);
+//     try writer.writeInt(u32, @enumToInt(header.size), .little);
 // }
 
 const std = @import("std");

@@ -2,7 +2,7 @@ const std = @import("std");
 const testing = std.testing;
 const archive = @import("archive");
 
-const c = @import("c.zig");
+// const c = @import("c.zig");
 pub const dex = @import("dex.zig");
 pub const binxml = @import("binxml.zig");
 pub const signing = @import("signing.zig");
@@ -26,7 +26,7 @@ const usage =
 
 const Subcommand = enum {
     zip,
-    xml,
+    // xml,
     binxml,
     apk,
     dex,
@@ -63,7 +63,7 @@ pub fn run(stdout: std.fs.File) !void {
     switch (cmd) {
         .zip => try readZip(alloc, args, stdout),
         .binxml => try readBinXml(alloc, args, stdout),
-        .xml => try readXml(alloc, args, stdout),
+        // .xml => try readXml(alloc, args, stdout),
         .apk => try readApk(alloc, args, stdout),
         .dex => try readDex(alloc, args, stdout),
         .@"align" => try alignZip(alloc, args, stdout),
@@ -73,131 +73,131 @@ pub fn run(stdout: std.fs.File) !void {
     }
 }
 
-pub fn print_attributes(stdout: std.fs.File, doc: c.xmlDocPtr, node: *c.xmlNode) !void {
-    var cur_attribute = node.properties;
-    _ = doc;
-    while (cur_attribute) |attribute| : (cur_attribute = attribute.*.next) {
-        const attr_name = attribute.*.name;
-        const attr_value = c.xmlGetProp(node, attr_name);
-        defer c.xmlFree.?(attr_value);
-        try std.fmt.format(stdout.writer(), " {s}={s}", .{ attr_name, attr_value });
-    }
-}
+// pub fn print_attributes(stdout: std.fs.File, doc: c.xmlDocPtr, node: *c.xmlNode) !void {
+//     var cur_attribute = node.properties;
+//     _ = doc;
+//     while (cur_attribute) |attribute| : (cur_attribute = attribute.*.next) {
+//         const attr_name = attribute.*.name;
+//         const attr_value = c.xmlGetProp(node, attr_name);
+//         defer c.xmlFree.?(attr_value);
+//         try std.fmt.format(stdout.writer(), " {s}={s}", .{ attr_name, attr_value });
+//     }
+// }
 
-const XMLReaderType = enum(c_int) {
-    None = c.XML_READER_TYPE_NONE,
-    Element = c.XML_READER_TYPE_ELEMENT,
-    Attribute = c.XML_READER_TYPE_ATTRIBUTE,
-    Text = c.XML_READER_TYPE_TEXT,
-    CData,
-    EntityReference,
-    Entity,
-    ProcessingInstruction,
-    Comment,
-    Document,
-    DocumentType,
-    DocumentFragment,
-    Notation,
-    Whitespace,
-    SignificantWhitespace = c.XML_READER_TYPE_SIGNIFICANT_WHITESPACE,
-    EndElement = c.XML_READER_TYPE_END_ELEMENT,
-    EndEntity,
-    XMLDeclaration,
-};
-
-pub fn print_node(stdout: std.fs.File, reader: c.xmlTextReaderPtr) !void {
-    var name: [*:0]const u8 = c.xmlTextReaderConstName(reader) orelse "--";
-    var t = c.xmlTextReaderNodeType(reader);
-    try stdout.writer().print("{:<5} {s: <25} {s: <20} {:<10} {:<10}", .{
-        c.xmlTextReaderDepth(reader),
-        @tagName(@as(XMLReaderType, @enumFromInt(t))),
-        name,
-        c.xmlTextReaderIsEmptyElement(reader),
-        c.xmlTextReaderHasValue(reader),
-    });
-
-    if (c.xmlTextReaderConstValue(reader)) |value| {
-        try stdout.writer().print("{s}\n", .{value});
-    } else {
-        _ = try stdout.writer().write("\n");
-    }
-}
-
-pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
-    var reader = c.xmlNewTextReaderFilename(args[2].ptr);
-    if (reader == null) {
-        try std.fmt.format(stdout.writer(), "error: could not open file {s}\n", .{args[2]});
-        return error.XMLReaderInit;
-    }
-    defer {
-        c.xmlFreeTextReader(reader);
-        c.xmlCleanupParser();
-    }
-
-    var builder = binxml.XMLTree.Builder.init(alloc);
-
-    var attributes = std.ArrayList(binxml.XMLTree.Builder.Attribute_b).init(alloc);
-    defer attributes.deinit();
-
-    var ret = c.xmlTextReaderRead(reader);
-    while (ret == 1) : (ret = c.xmlTextReaderRead(reader)) {
-        // try print_node(stdout, reader);
-        var node_type = @as(XMLReaderType, @enumFromInt(c.xmlTextReaderNodeType(reader)));
-        const line_number = @as(u32, @intCast(c.xmlTextReaderGetParserLineNumber(reader)));
-        try attributes.resize(0); // clear list
-        switch (node_type) {
-            .Element => {
-                const name = std.mem.span(c.xmlTextReaderConstLocalName(reader) orelse return error.MissingNameForElement);
-                const namespace = if (c.xmlTextReaderConstNamespaceUri(reader)) |namespace| std.mem.span(namespace) else null;
-                const is_empty = c.xmlTextReaderIsEmptyElement(reader) == 1;
-
-                if (c.xmlTextReaderHasAttributes(reader) == 1) {
-                    const count = @as(usize, @intCast(c.xmlTextReaderAttributeCount(reader)));
-                    for (0..count) |i| {
-                        if (c.xmlTextReaderMoveToAttributeNo(reader, @as(c_int, @intCast(i))) != 1) continue;
-                        const attr_ns = if (c.xmlTextReaderConstNamespaceUri(reader)) |ns| std.mem.span(ns) else null;
-                        const attr_name = std.mem.span(c.xmlTextReaderConstLocalName(reader) orelse return error.MissingAttributeName);
-                        const value = std.mem.span(c.xmlTextReaderConstValue(reader) orelse return error.MissingAttributeValue);
-                        if (c.xmlTextReaderIsNamespaceDecl(reader) == 1) {
-                            try builder.startNamespace(attr_name, value);
-                            continue;
-                        }
-                        try attributes.append(.{
-                            .namespace = attr_ns,
-                            .name = attr_name,
-                            .value = value,
-                        });
-                    }
-                }
-
-                try builder.startElement(name, attributes.items, .{
-                    .namespace = (namespace),
-                    .line_number = line_number,
-                });
-                if (is_empty) {
-                    try builder.endElement(name, .{
-                        .namespace = namespace,
-                        .line_number = line_number,
-                    });
-                    // try stdout.writer().print("{}", .{builder.xml_tree.nodes.getLast()});
-                }
-            },
-            .EndElement => {
-                const name = std.mem.span(c.xmlTextReaderConstLocalName(reader) orelse return error.MissingNameForEndElement);
-                const namespace = if (c.xmlTextReaderConstNamespaceUri(reader)) |namespace| std.mem.span(namespace) else null;
-                try builder.endElement(name, .{
-                    .namespace = namespace,
-                    .line_number = line_number,
-                });
-                // try stdout.writer().print("{}", .{builder.xml_tree.nodes.getLast()});
-            },
-            // .CData => builder.insertCData(.{}),
-            else => {},
-        }
-    }
-
-    try print_xml_tree(builder.xml_tree, stdout);
-}
+// const XMLReaderType = enum(c_int) {
+//     None = c.XML_READER_TYPE_NONE,
+//     Element = c.XML_READER_TYPE_ELEMENT,
+//     Attribute = c.XML_READER_TYPE_ATTRIBUTE,
+//     Text = c.XML_READER_TYPE_TEXT,
+//     CData,
+//     EntityReference,
+//     Entity,
+//     ProcessingInstruction,
+//     Comment,
+//     Document,
+//     DocumentType,
+//     DocumentFragment,
+//     Notation,
+//     Whitespace,
+//     SignificantWhitespace = c.XML_READER_TYPE_SIGNIFICANT_WHITESPACE,
+//     EndElement = c.XML_READER_TYPE_END_ELEMENT,
+//     EndEntity,
+//     XMLDeclaration,
+// };
+//
+// pub fn print_node(stdout: std.fs.File, reader: c.xmlTextReaderPtr) !void {
+//     var name: [*:0]const u8 = c.xmlTextReaderConstName(reader) orelse "--";
+//     var t = c.xmlTextReaderNodeType(reader);
+//     try stdout.writer().print("{:<5} {s: <25} {s: <20} {:<10} {:<10}", .{
+//         c.xmlTextReaderDepth(reader),
+//         @tagName(@as(XMLReaderType, @enumFromInt(t))),
+//         name,
+//         c.xmlTextReaderIsEmptyElement(reader),
+//         c.xmlTextReaderHasValue(reader),
+//     });
+//
+//     if (c.xmlTextReaderConstValue(reader)) |value| {
+//         try stdout.writer().print("{s}\n", .{value});
+//     } else {
+//         _ = try stdout.writer().write("\n");
+//     }
+// }
+//
+// pub fn readXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+//     var reader = c.xmlNewTextReaderFilename(args[2].ptr);
+//     if (reader == null) {
+//         try std.fmt.format(stdout.writer(), "error: could not open file {s}\n", .{args[2]});
+//         return error.XMLReaderInit;
+//     }
+//     defer {
+//         c.xmlFreeTextReader(reader);
+//         c.xmlCleanupParser();
+//     }
+//
+//     var builder = binxml.XMLTree.Builder.init(alloc);
+//
+//     var attributes = std.ArrayList(binxml.XMLTree.Builder.Attribute_b).init(alloc);
+//     defer attributes.deinit();
+//
+//     var ret = c.xmlTextReaderRead(reader);
+//     while (ret == 1) : (ret = c.xmlTextReaderRead(reader)) {
+//         // try print_node(stdout, reader);
+//         var node_type = @as(XMLReaderType, @enumFromInt(c.xmlTextReaderNodeType(reader)));
+//         const line_number = @as(u32, @intCast(c.xmlTextReaderGetParserLineNumber(reader)));
+//         try attributes.resize(0); // clear list
+//         switch (node_type) {
+//             .Element => {
+//                 const name = std.mem.span(c.xmlTextReaderConstLocalName(reader) orelse return error.MissingNameForElement);
+//                 const namespace = if (c.xmlTextReaderConstNamespaceUri(reader)) |namespace| std.mem.span(namespace) else null;
+//                 const is_empty = c.xmlTextReaderIsEmptyElement(reader) == 1;
+//
+//                 if (c.xmlTextReaderHasAttributes(reader) == 1) {
+//                     const count = @as(usize, @intCast(c.xmlTextReaderAttributeCount(reader)));
+//                     for (0..count) |i| {
+//                         if (c.xmlTextReaderMoveToAttributeNo(reader, @as(c_int, @intCast(i))) != 1) continue;
+//                         const attr_ns = if (c.xmlTextReaderConstNamespaceUri(reader)) |ns| std.mem.span(ns) else null;
+//                         const attr_name = std.mem.span(c.xmlTextReaderConstLocalName(reader) orelse return error.MissingAttributeName);
+//                         const value = std.mem.span(c.xmlTextReaderConstValue(reader) orelse return error.MissingAttributeValue);
+//                         if (c.xmlTextReaderIsNamespaceDecl(reader) == 1) {
+//                             try builder.startNamespace(attr_name, value);
+//                             continue;
+//                         }
+//                         try attributes.append(.{
+//                             .namespace = attr_ns,
+//                             .name = attr_name,
+//                             .value = value,
+//                         });
+//                     }
+//                 }
+//
+//                 try builder.startElement(name, attributes.items, .{
+//                     .namespace = (namespace),
+//                     .line_number = line_number,
+//                 });
+//                 if (is_empty) {
+//                     try builder.endElement(name, .{
+//                         .namespace = namespace,
+//                         .line_number = line_number,
+//                     });
+//                     // try stdout.writer().print("{}", .{builder.xml_tree.nodes.getLast()});
+//                 }
+//             },
+//             .EndElement => {
+//                 const name = std.mem.span(c.xmlTextReaderConstLocalName(reader) orelse return error.MissingNameForEndElement);
+//                 const namespace = if (c.xmlTextReaderConstNamespaceUri(reader)) |namespace| std.mem.span(namespace) else null;
+//                 try builder.endElement(name, .{
+//                     .namespace = namespace,
+//                     .line_number = line_number,
+//                 });
+//                 // try stdout.writer().print("{}", .{builder.xml_tree.nodes.getLast()});
+//             },
+//             // .CData => builder.insertCData(.{}),
+//             else => {},
+//         }
+//     }
+//
+//     try print_xml_tree(builder.xml_tree, stdout);
+// }
 
 pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
     const filepath = try std.fs.realpathAlloc(alloc, args[2]);
@@ -205,7 +205,8 @@ pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &std.io.StreamSource{ .file = file });
+    var stream_source = std.io.StreamSource{ .file = file };
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
 
     try archive_reader.load();
 
@@ -224,7 +225,8 @@ pub fn signZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &std.io.StreamSource{ .file = file });
+    var stream_source = std.io.StreamSource{ .file = file };
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
 
     try archive_reader.load();
 
@@ -312,7 +314,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
 
         var size_buf: [4]u8 = undefined;
         var size = @as(u32, @intCast(chunk.len));
-        std.mem.writeIntSlice(u32, &size_buf, size, .Little);
+        std.mem.writeInt(u32, &size_buf, size, .little);
 
         hash.update(&.{0xa5}); // Magic value byte
         hash.update(&size_buf); // Size in bytes, le u32
@@ -325,7 +327,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     var hash = Sha256.init(.{});
 
     var size_buf: [4]u8 = undefined;
-    std.mem.writeIntSlice(u32, &size_buf, @as(u32, @intCast(chunks.len)), .Little);
+    std.mem.writeInt(u32, &size_buf, @as(u32, @intCast(chunks.len)), .little);
 
     hash.update(&.{0x5a}); // Magic value byte for final digest
     hash.update(&size_buf);
@@ -350,7 +352,8 @@ pub fn alignZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fil
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &std.io.StreamSource{ .file = file });
+    var stream_source = std.io.StreamSource{ .file = file };
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
 
     try archive_reader.load();
 
@@ -383,7 +386,8 @@ pub fn readApk(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &std.io.StreamSource{ .file = file });
+    var stream_source = std.io.StreamSource{ .file = file };
+    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
 
     try archive_reader.load();
 
@@ -422,17 +426,17 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         try std.fmt.format(stdout.writer(), "{}\n", .{list_item});
     }
 
-    for (classes.string_ids, 0..) |id, i| {
+    for (classes.string_ids.items, 0..) |id, i| {
         const str = try classes.getString(id);
         try std.fmt.format(stdout.writer(), "String {}: {s}\n", .{ i, str.data });
     }
 
-    for (classes.type_ids, 0..) |id, i| {
+    for (classes.type_ids.items, 0..) |id, i| {
         const str = try classes.getTypeString(id);
         try std.fmt.format(stdout.writer(), "Type Descriptor {}: {s}\n", .{ i, str.data });
     }
 
-    for (classes.proto_ids, 0..) |id, i| {
+    for (classes.proto_ids.items, 0..) |id, i| {
         const prototype = try classes.getPrototype(id, alloc);
         try std.fmt.format(stdout.writer(), "Prototype {}; shorty {s}; (", .{ i, prototype.shorty.data });
         if (prototype.parameters) |parameters| {
@@ -443,17 +447,17 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         try std.fmt.format(stdout.writer(), "){s}\n", .{prototype.return_type.data});
     }
 
-    for (classes.field_ids, 0..) |id, i| {
-        const class_str = try classes.getString(classes.string_ids[classes.type_ids[id.class_idx].descriptor_idx]);
-        const type_str = try classes.getString(classes.string_ids[classes.type_ids[id.type_idx].descriptor_idx]);
-        const name_str = try classes.getString(classes.string_ids[id.name_idx]);
+    for (classes.field_ids.items, 0..) |id, i| {
+        const class_str = try classes.getString(classes.string_ids.items[classes.type_ids.items[id.class_idx].descriptor_idx]);
+        const type_str = try classes.getString(classes.string_ids.items[classes.type_ids.items[id.type_idx].descriptor_idx]);
+        const name_str = try classes.getString(classes.string_ids.items[id.name_idx]);
         try std.fmt.format(stdout.writer(), "Field {}, {s}.{s}: {s}", .{ i, class_str.data, name_str.data, type_str.data });
     }
 
-    for (classes.method_ids, 0..) |id, i| {
-        const class_str = try classes.getString(classes.string_ids[classes.type_ids[id.class_idx].descriptor_idx]);
-        const name_str = try classes.getString(classes.string_ids[id.name_idx]);
-        const prototype = try classes.getPrototype(classes.proto_ids[id.proto_idx], alloc);
+    for (classes.method_ids.items, 0..) |id, i| {
+        const class_str = try classes.getString(classes.string_ids.items[classes.type_ids.items[id.class_idx].descriptor_idx]);
+        const name_str = try classes.getString(classes.string_ids.items[id.name_idx]);
+        const prototype = try classes.getPrototype(classes.proto_ids.items[id.proto_idx], alloc);
         try std.fmt.format(stdout.writer(), "Method {}, {s}.{s}(", .{ i, class_str.data, name_str.data });
         if (prototype.parameters) |parameters| {
             for (try classes.getTypeStringList(parameters, alloc)) |type_string| {
@@ -463,11 +467,11 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         try std.fmt.format(stdout.writer(), "){s}\n", .{prototype.return_type.data});
     }
 
-    for (classes.class_defs) |def| {
-        const class = try classes.getTypeString(classes.type_ids[def.class_idx]);
-        const superclass = if (def.superclass_idx == dex.NO_INDEX) "null" else (try classes.getTypeString(classes.type_ids[def.superclass_idx])).data;
-        const file_name = try classes.getString(classes.string_ids[def.source_file_idx]);
-        try std.fmt.format(stdout.writer(), "{} Class {s} extends {s} defined in {s}\n", .{ def.access_flags, class.data, superclass, file_name.data });
+    for (classes.class_defs.items) |def| {
+        const class = try classes.getTypeString(classes.type_ids.items[def.class_idx]);
+        const superclass = if (def.superclass_idx == dex.NO_INDEX) "null" else (try classes.getTypeString(classes.type_ids.items[def.superclass_idx])).data;
+        const file_name = if (def.source_file_idx == dex.NO_INDEX) "null" else (try classes.getString(classes.string_ids.items[def.source_file_idx])).data;
+        try std.fmt.format(stdout.writer(), "{} Class {s} extends {s} defined in {s}\n", .{ def.access_flags, class.data, superclass, file_name });
     }
 }
 

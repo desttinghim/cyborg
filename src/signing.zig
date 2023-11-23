@@ -168,7 +168,7 @@ pub fn update_eocd_directory_offset(signing: Signing, mmapped_file: []u8) void {
     std.debug.assert(signing.signing_block_offset < std.math.maxInt(u32));
     const pos = @as(u32, @intCast(signing.signing_block_offset));
     const eocd = mmapped_file[signing.end_of_central_directory_offset..];
-    std.mem.writeInt(u32, eocd[16..20], pos, .Little);
+    std.mem.writeInt(u32, eocd[16..20], pos, .little);
 }
 
 /// Locates the signing block and verifies that the:
@@ -229,13 +229,13 @@ fn get_signing_block_offset(stream_source: *std.io.StreamSource, directory_offse
 
     try stream_source.seekTo(block_size_offset);
 
-    const block_size = try stream_source.reader().readInt(u64, .Little);
+    const block_size = try stream_source.reader().readInt(u64, .little);
 
     const block_start = directory_offset - block_size - 8;
 
     try stream_source.seekTo(block_start);
 
-    const block_size_2 = try stream_source.reader().readInt(u64, .Little);
+    const block_size_2 = try stream_source.reader().readInt(u64, .little);
 
     if (block_size != block_size_2) return error.BlockSizeMismatch;
 
@@ -276,9 +276,9 @@ pub fn verify() void {}
 pub fn locate_entry(signing: Signing, tag: SigningEntry.Tag) ![]const u8 {
     var index: usize = 8; // skip the signing block size
     while (index < signing.signing_block.len) {
-        const size = std.mem.readInt(u64, signing.signing_block[index..][0..8], .Little);
+        const size = std.mem.readInt(u64, signing.signing_block[index..][0..8], .little);
         if (size > signing.signing_block.len) return error.SigningEntryLengthOutOfBounds;
-        const entry_tag = @as(SigningEntry.Tag, @enumFromInt(std.mem.readInt(u32, signing.signing_block[index + 8 ..][0..4], .Little)));
+        const entry_tag = @as(SigningEntry.Tag, @enumFromInt(std.mem.readInt(u32, signing.signing_block[index + 8 ..][0..4], .little)));
 
         if (entry_tag == tag)
             return signing.signing_block[index + 12 ..][0 .. size - 4];
@@ -324,14 +324,14 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
         const subject_pk_bitstring = public_key_chunk.slice[subject_pk.slice.start + 1 ..];
 
         const pk_components = try std.crypto.Certificate.rsa.PublicKey.parseDer(subject_pk_bitstring);
-        const public_key = try std.crypto.Certificate.rsa.PublicKey.fromBytes(pk_components.exponent, pk_components.modulus, alloc);
+        const public_key = try std.crypto.Certificate.rsa.PublicKey.fromBytes(pk_components.exponent, pk_components.modulus);
 
         // Parse signature
         {
             var signature_iter = try get_length_prefixed_slice(signature_sequence.slice);
             var signature_opt: ?[]const u8 = signature_iter.slice;
             while (signature_opt) |signature| {
-                const signature_algorithm_id = std.mem.readInt(u32, signature[0..4], .Little);
+                const signature_algorithm_id = std.mem.readInt(u32, signature[0..4], .little);
 
                 const signed_data_sig = get_length_prefixed_slice(signature[4..]) catch return error.UnexpectedEndOfStream;
 
@@ -347,7 +347,7 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
                 std.debug.print("PSSSignature: {}\n", .{std.fmt.fmtSliceHexUpper(signed_data_sig.slice)});
                 var sig = rsa.PSSSignature.fromBytes(modulus_len, signed_data_sig.slice);
 
-                const verified = try rsa.PSSSignature.verify(modulus_len, sig, signed_data_block.slice, public_key, Sha256, alloc);
+                const verified = try rsa.PSSSignature.verify(modulus_len, sig, signed_data_block.slice, public_key, Sha256);
                 _ = verified;
 
                 try signatures.append(alloc, .{
@@ -371,10 +371,10 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
             var digest_iter = try get_length_prefixed_slice(digest_sequence.slice);
             var digest_chunk_opt: ?[]const u8 = digest_iter.slice;
             while (digest_chunk_opt) |digest_chunk| {
-                const signature_algorithm_id = std.mem.readInt(u32, digest_chunk[0..4], .Little);
+                const signature_algorithm_id = std.mem.readInt(u32, digest_chunk[0..4], .little);
                 const algorithm = @as(SigningEntry.Signer.Algorithm, @enumFromInt(signature_algorithm_id));
 
-                const digest_length = std.mem.readInt(u32, digest_chunk[4..8], .Little);
+                const digest_length = std.mem.readInt(u32, digest_chunk[4..8], .little);
                 const digest = digest_chunk[8 .. 8 + digest_length];
 
                 try digests.append(alloc, .{
@@ -411,7 +411,7 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
                 var attribute_iter = get_length_prefixed_slice(attribute_sequence.slice) catch break :attribute;
                 var attribute_chunk_opt: ?[]const u8 = attribute_iter.slice;
                 while (attribute_chunk_opt) |attribute_chunk| {
-                    const id = std.mem.readInt(u32, attribute_chunk[0..4], .Little);
+                    const id = std.mem.readInt(u32, attribute_chunk[0..4], .little);
                     try attributes.append(alloc, .{
                         .id = @as(SigningEntry.Signer.SignedData.Attribute.ID, @enumFromInt(id)),
                         .value = attribute_chunk[4..],
@@ -431,7 +431,7 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
         };
 
         {
-            const sdpk = signed_data.certificates[0][0].pubKey();
+            const sdpk = signed_data.certificates.items[0].pubKey();
             std.debug.assert(std.mem.eql(u8, subject_pk_bitstring, sdpk));
         }
 
@@ -459,7 +459,7 @@ const SliceIter = struct {
 
 pub fn get_length_prefixed_slice(slice: []const u8) !SliceIter {
     if (slice.len <= 4) return error.SliceTooSmall;
-    const length = std.mem.readInt(u32, slice[0..4], .Little);
+    const length = std.mem.readInt(u32, slice[0..4], .little);
     const new_slice = slice[4..];
     if (length == slice.len) return .{ .slice = new_slice[0..length], .remaining = null };
     if (length > slice.len) {

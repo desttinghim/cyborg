@@ -427,44 +427,44 @@ pub const Dex = struct {
 
         // Read the string id list
         try seek.seekTo(dex.header.string_ids_off);
-        dex.string_ids = try allocator.alloc(StringIdItem, dex.header.string_ids_size);
-        for (dex.string_ids) |*id| {
-            id.* = try StringIdItem.read(reader);
+        dex.string_ids = try std.ArrayListUnmanaged(StringIdItem).initCapacity(allocator, dex.header.string_ids_size);
+        for (0..dex.header.string_ids_size) |_| {
+            dex.string_ids.appendAssumeCapacity(try StringIdItem.read(reader));
         }
 
         // Read the type id list
         try seek.seekTo(dex.header.type_ids_off);
-        dex.type_ids = try allocator.alloc(TypeIdItem, dex.header.type_ids_size);
-        for (dex.type_ids) |*id| {
-            id.* = try TypeIdItem.read(reader);
+        dex.type_ids = try std.ArrayListUnmanaged(TypeIdItem).initCapacity(allocator, dex.header.type_ids_size);
+        for (0..dex.header.type_ids_size) |_| {
+            dex.type_ids.appendAssumeCapacity(try TypeIdItem.read(reader));
         }
 
         // Read the proto id list
         try seek.seekTo(dex.header.proto_ids_off);
-        dex.proto_ids = try allocator.alloc(ProtoIdItem, dex.header.proto_ids_size);
-        for (dex.proto_ids) |*id| {
-            id.* = try ProtoIdItem.read(reader);
+        dex.proto_ids = try std.ArrayListUnmanaged(ProtoIdItem).initCapacity(allocator, dex.header.proto_ids_size);
+        for (0..dex.header.proto_ids_size) |_| {
+            dex.proto_ids.appendAssumeCapacity(try ProtoIdItem.read(reader));
         }
 
         // Read the field id list
         try seek.seekTo(dex.header.field_ids_off);
-        dex.field_ids = try allocator.alloc(FieldIdItem, dex.header.field_ids_size);
-        for (dex.field_ids) |*id| {
-            id.* = try FieldIdItem.read(reader);
+        dex.field_ids = try std.ArrayListUnmanaged(FieldIdItem).initCapacity(allocator, dex.header.field_ids_size);
+        for (0..dex.header.field_ids_size) |_| {
+            dex.field_ids.appendAssumeCapacity(try FieldIdItem.read(reader));
         }
 
         // Read the method id list
         try seek.seekTo(dex.header.method_ids_off);
-        dex.method_ids = try allocator.alloc(MethodIdItem, dex.header.method_ids_size);
-        for (dex.method_ids) |*id| {
-            id.* = try MethodIdItem.read(reader);
+        dex.method_ids = try std.ArrayListUnmanaged(MethodIdItem).initCapacity(allocator, dex.header.method_ids_size);
+        for (0..dex.header.method_ids_size) |_| {
+            dex.method_ids.appendAssumeCapacity(try MethodIdItem.read(reader));
         }
 
         // Read the class def list
         try seek.seekTo(dex.header.class_defs_off);
-        dex.class_defs = try allocator.alloc(ClassDefItem, dex.header.class_defs_size);
-        for (dex.class_defs) |*def| {
-            def.* = try ClassDefItem.read(reader);
+        dex.class_defs = try std.ArrayListUnmanaged(ClassDefItem).initCapacity(allocator, dex.header.class_defs_size);
+        for (0..dex.header.class_defs_size) |_| {
+            dex.class_defs.appendAssumeCapacity(try ClassDefItem.read(reader));
         }
 
         // TODO?
@@ -473,8 +473,9 @@ pub const Dex = struct {
 
         // Read data into buffer
         try seek.seekTo(dex.header.data_off);
-        dex.data = try allocator.alloc(u8, dex.header.data_size);
-        const amount = try reader.read(dex.data);
+        dex.data = try std.ArrayListUnmanaged(u8).initCapacity(allocator, dex.header.data_size);
+        const data_slice = dex.data.addManyAsSliceAssumeCapacity(dex.header.data_size);
+        const amount = try reader.read(data_slice);
         if (amount != dex.header.data_size) {
             std.log.err("read {} bytes into dex.data", .{amount});
             return error.UnexpectedEOF;
@@ -491,10 +492,11 @@ pub const Dex = struct {
 
     pub fn getString(dex: Dex, id: StringIdItem) !StringDataItem {
         const offset = id.string_data_off - dex.header.data_off;
-        var fbs = std.io.fixedBufferStream(dex.data[offset..]);
+        var fbs = std.io.fixedBufferStream(dex.data.items[offset..]);
         const reader = fbs.reader();
         const codepoints = try std.leb.readULEB128(u32, reader);
-        const data = std.mem.sliceTo(dex.data[offset..], 0);
+        const pos = fbs.getPos() catch unreachable;
+        const data = std.mem.sliceTo(dex.data.items[offset + pos ..], 0);
         return StringDataItem{
             .utf16_size = codepoints,
             .data = data,
@@ -503,20 +505,20 @@ pub const Dex = struct {
 
     pub fn getTypeString(dex: Dex, id: TypeIdItem) !StringDataItem {
         const descriptor_idx = id.descriptor_idx;
-        if (descriptor_idx > dex.string_ids.len) return error.TypeStringOutOfBounds;
-        return dex.getString(dex.string_ids[descriptor_idx]);
+        if (descriptor_idx > dex.string_ids.items.len) return error.TypeStringOutOfBounds;
+        return dex.getString(dex.string_ids.items[descriptor_idx]);
     }
 
     pub fn getPrototype(dex: Dex, id: ProtoIdItem, allocator: std.mem.Allocator) !Prototype {
         const parameters = if (id.parameters_off == 0) null else parameters: {
             const offset = id.parameters_off - dex.header.data_off;
-            var fbs = std.io.fixedBufferStream(dex.data[offset..]);
+            var fbs = std.io.fixedBufferStream(dex.data.items[offset..]);
             const reader = fbs.reader();
             break :parameters try TypeList.read(reader, allocator);
         };
         return Prototype{
-            .shorty = try dex.getString(dex.string_ids[id.shorty_idx]),
-            .return_type = try dex.getTypeString(dex.type_ids[id.return_type_idx]),
+            .shorty = try dex.getString(dex.string_ids.items[id.shorty_idx]),
+            .return_type = try dex.getTypeString(dex.type_ids.items[id.return_type_idx]),
             .parameters = parameters,
         };
     }
@@ -524,7 +526,7 @@ pub const Dex = struct {
     pub fn getTypeStringList(dex: Dex, type_list: TypeList, allocator: std.mem.Allocator) ![]StringDataItem {
         var string_list = try allocator.alloc(StringDataItem, type_list.size);
         for (type_list.list, 0..) |type_item, i| {
-            string_list[i] = try dex.getTypeString(dex.type_ids[type_item.type_idx]);
+            string_list[i] = try dex.getTypeString(dex.type_ids.items[type_item.type_idx]);
         }
         return string_list;
     }
@@ -744,31 +746,31 @@ const HeaderItem = struct {
         }
 
         // TODO: compute checksum and compare
-        header.checksum = try reader.readInt(u32, .Little);
+        header.checksum = try reader.readInt(u32, .little);
 
         if (try reader.read(&header.signature) != header.signature.len) return error.UnexpectedEOF;
 
-        header.file_size = try reader.readInt(u32, .Little);
-        header.header_size = try reader.readInt(u32, .Little);
+        header.file_size = try reader.readInt(u32, .little);
+        header.header_size = try reader.readInt(u32, .little);
         if (header.header_size != 0x70) return error.UnexpectedHeaderSize;
-        header.endian_tag = if (try reader.readEnum(Endianness, .Little) == .Endian) .Little else .Big;
-        header.link_size = try reader.readInt(u32, .Little);
-        header.link_off = try reader.readInt(u32, .Little);
-        header.map_off = try reader.readInt(u32, .Little);
-        header.string_ids_size = try reader.readInt(u32, .Little);
-        header.string_ids_off = try reader.readInt(u32, .Little);
-        header.type_ids_size = try reader.readInt(u32, .Little);
-        header.type_ids_off = try reader.readInt(u32, .Little);
-        header.proto_ids_size = try reader.readInt(u32, .Little);
-        header.proto_ids_off = try reader.readInt(u32, .Little);
-        header.field_ids_size = try reader.readInt(u32, .Little);
-        header.field_ids_off = try reader.readInt(u32, .Little);
-        header.method_ids_size = try reader.readInt(u32, .Little);
-        header.method_ids_off = try reader.readInt(u32, .Little);
-        header.class_defs_size = try reader.readInt(u32, .Little);
-        header.class_defs_off = try reader.readInt(u32, .Little);
-        header.data_size = try reader.readInt(u32, .Little);
-        header.data_off = try reader.readInt(u32, .Little);
+        header.endian_tag = if (try reader.readEnum(Endianness, .little) == .Endian) .little else .big;
+        header.link_size = try reader.readInt(u32, .little);
+        header.link_off = try reader.readInt(u32, .little);
+        header.map_off = try reader.readInt(u32, .little);
+        header.string_ids_size = try reader.readInt(u32, .little);
+        header.string_ids_off = try reader.readInt(u32, .little);
+        header.type_ids_size = try reader.readInt(u32, .little);
+        header.type_ids_off = try reader.readInt(u32, .little);
+        header.proto_ids_size = try reader.readInt(u32, .little);
+        header.proto_ids_off = try reader.readInt(u32, .little);
+        header.field_ids_size = try reader.readInt(u32, .little);
+        header.field_ids_off = try reader.readInt(u32, .little);
+        header.method_ids_size = try reader.readInt(u32, .little);
+        header.method_ids_off = try reader.readInt(u32, .little);
+        header.class_defs_size = try reader.readInt(u32, .little);
+        header.class_defs_off = try reader.readInt(u32, .little);
+        header.data_size = try reader.readInt(u32, .little);
+        header.data_off = try reader.readInt(u32, .little);
 
         return header;
     }
@@ -780,7 +782,7 @@ const MapList = struct {
 
     pub fn read(header: HeaderItem, seek: anytype, reader: anytype, allocator: std.mem.Allocator) !MapList {
         try seek.seekTo(header.map_off);
-        const size = try reader.readInt(u32, .Little);
+        const size = try reader.readInt(u32, .little);
         var list = try allocator.alloc(MapItem, size);
         errdefer allocator.free(list);
         for (list) |*map_item| {
@@ -801,10 +803,10 @@ const MapItem = struct {
 
     pub fn read(reader: anytype) !MapItem {
         return MapItem{
-            .type = try reader.readEnum(TypeCode, .Little),
-            ._unused = try reader.readInt(u16, .Little),
-            .size = try reader.readInt(u32, .Little),
-            .offset = try reader.readInt(u32, .Little),
+            .type = try reader.readEnum(TypeCode, .little),
+            ._unused = try reader.readInt(u16, .little),
+            .size = try reader.readInt(u32, .little),
+            .offset = try reader.readInt(u32, .little),
         };
     }
 };
@@ -838,7 +840,7 @@ const StringIdItem = struct {
 
     pub fn read(reader: anytype) !StringIdItem {
         return StringIdItem{
-            .string_data_off = try reader.readInt(u32, .Little),
+            .string_data_off = try reader.readInt(u32, .little),
         };
     }
 };
@@ -855,7 +857,7 @@ const TypeIdItem = struct {
     descriptor_idx: u32,
     pub fn read(reader: anytype) !TypeIdItem {
         return TypeIdItem{
-            .descriptor_idx = try reader.readInt(u32, .Little),
+            .descriptor_idx = try reader.readInt(u32, .little),
         };
     }
 };
@@ -870,9 +872,9 @@ const ProtoIdItem = struct {
 
     pub fn read(reader: anytype) !@This() {
         return @This(){
-            .shorty_idx = try reader.readInt(u32, .Little),
-            .return_type_idx = try reader.readInt(u32, .Little),
-            .parameters_off = try reader.readInt(u32, .Little),
+            .shorty_idx = try reader.readInt(u32, .little),
+            .return_type_idx = try reader.readInt(u32, .little),
+            .parameters_off = try reader.readInt(u32, .little),
         };
     }
 };
@@ -883,9 +885,9 @@ const FieldIdItem = struct {
     name_idx: u32,
     pub fn read(reader: anytype) !@This() {
         return @This(){
-            .class_idx = try reader.readInt(u16, .Little),
-            .type_idx = try reader.readInt(u16, .Little),
-            .name_idx = try reader.readInt(u32, .Little),
+            .class_idx = try reader.readInt(u16, .little),
+            .type_idx = try reader.readInt(u16, .little),
+            .name_idx = try reader.readInt(u32, .little),
         };
     }
 };
@@ -897,9 +899,9 @@ const MethodIdItem = struct {
 
     pub fn read(reader: anytype) !@This() {
         return @This(){
-            .class_idx = try reader.readInt(u16, .Little),
-            .proto_idx = try reader.readInt(u16, .Little),
-            .name_idx = try reader.readInt(u32, .Little),
+            .class_idx = try reader.readInt(u16, .little),
+            .proto_idx = try reader.readInt(u16, .little),
+            .name_idx = try reader.readInt(u32, .little),
         };
     }
 };
@@ -916,14 +918,14 @@ const ClassDefItem = struct {
 
     pub fn read(reader: anytype) !@This() {
         return @This(){
-            .class_idx = try reader.readInt(u32, .Little),
-            .access_flags = @as(AccessFlags, @bitCast(try reader.readInt(u32, .Little))),
-            .superclass_idx = try reader.readInt(u32, .Little),
-            .interfaces_off = try reader.readInt(u32, .Little),
-            .source_file_idx = try reader.readInt(u32, .Little),
-            .annotations_off = try reader.readInt(u32, .Little),
-            .class_data_off = try reader.readInt(u32, .Little),
-            .static_values_off = try reader.readInt(u32, .Little),
+            .class_idx = try reader.readInt(u32, .little),
+            .access_flags = @as(AccessFlags, @bitCast(try reader.readInt(u32, .little))),
+            .superclass_idx = try reader.readInt(u32, .little),
+            .interfaces_off = try reader.readInt(u32, .little),
+            .source_file_idx = try reader.readInt(u32, .little),
+            .annotations_off = try reader.readInt(u32, .little),
+            .class_data_off = try reader.readInt(u32, .little),
+            .static_values_off = try reader.readInt(u32, .little),
         };
     }
 };
@@ -932,7 +934,7 @@ const CallSiteIdItem = struct {
     call_site_off: u32,
     pub fn read(reader: anytype) !@This() {
         return @This(){
-            .call_site_off = try reader.readInt(u32, .Little),
+            .call_site_off = try reader.readInt(u32, .little),
         };
     }
 };
@@ -1005,7 +1007,7 @@ const TypeList = struct {
     list: []TypeItem,
 
     pub fn read(reader: anytype, allocator: std.mem.Allocator) !TypeList {
-        const size = try reader.readInt(u32, .Little);
+        const size = try reader.readInt(u32, .little);
         var list = try allocator.alloc(TypeItem, size);
         errdefer allocator.free(list);
         for (list) |*type_item| {
@@ -1023,7 +1025,7 @@ const TypeItem = struct {
 
     pub fn read(reader: anytype) !TypeItem {
         return TypeItem{
-            .type_idx = try reader.readInt(u16, .Little),
+            .type_idx = try reader.readInt(u16, .little),
         };
     }
 };

@@ -183,7 +183,7 @@ const Node = struct {
 
     fn read(reader: anytype, header: ResourceChunk.Header) !Node {
         return Node{
-            .line_number = try reader.readInt(u32, .Little),
+            .line_number = try reader.readInt(u32, .little),
             .comment = try StringPool.Ref.read(reader),
             .extended = switch (header.type) {
                 .XmlStartNamespace,
@@ -203,7 +203,7 @@ const Node = struct {
     pub fn write(node: Node, writer: anytype) !void {
         // try node.header.write(writer);
         // TODO: construct + write header
-        try writer.writeInt(u32, node.line_number, .Little);
+        try writer.writeInt(u32, node.line_number, .little);
         try node.comment.write();
         try switch (node.extended) {
             .CData => |cdata| cdata.write(writer),
@@ -282,23 +282,23 @@ const AttributeExtended = struct {
         return AttributeExtended{
             .namespace = try StringPool.Ref.read(reader),
             .name = try StringPool.Ref.read(reader),
-            .start = try reader.readInt(u16, .Little),
-            .size = try reader.readInt(u16, .Little),
-            .count = try reader.readInt(u16, .Little),
-            .id_index = try reader.readInt(u16, .Little),
-            .class_index = try reader.readInt(u16, .Little),
-            .style_index = try reader.readInt(u16, .Little),
+            .start = try reader.readInt(u16, .little),
+            .size = try reader.readInt(u16, .little),
+            .count = try reader.readInt(u16, .little),
+            .id_index = try reader.readInt(u16, .little),
+            .class_index = try reader.readInt(u16, .little),
+            .style_index = try reader.readInt(u16, .little),
         };
     }
     pub fn write(el: AttributeExtended, writer: anytype) !void {
         try el.namespace.write(writer);
         try el.name.write(writer);
-        try writer.writeInt(u16, el.start, .Little);
-        try writer.writeInt(u16, el.size, .Little);
-        try writer.writeInt(u16, el.count, .Little);
-        try writer.writeInt(u16, el.id_index, .Little);
-        try writer.writeInt(u16, el.class_index, .Little);
-        try writer.writeInt(u16, el.style_index, .Little);
+        try writer.writeInt(u16, el.start, .little);
+        try writer.writeInt(u16, el.size, .little);
+        try writer.writeInt(u16, el.count, .little);
+        try writer.writeInt(u16, el.id_index, .little);
+        try writer.writeInt(u16, el.class_index, .little);
+        try writer.writeInt(u16, el.style_index, .little);
     }
 };
 

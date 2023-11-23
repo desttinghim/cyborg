@@ -22,10 +22,10 @@ pub const Ref = struct {
         return self.index == std.math.maxInt(u32);
     }
     pub fn read(reader: anytype) !Ref {
-        return Ref{ .index = try reader.readInt(u32, .Little) };
+        return Ref{ .index = try reader.readInt(u32, .little) };
     }
     pub fn write(refe: Ref, writer: anytype) !void {
-        try writer.write(u32, refe.index, .Little);
+        try writer.write(u32, refe.index, .little);
     }
 };
 
@@ -56,21 +56,21 @@ const Header = struct {
     fn read(reader: anytype, chunk_header: ResourceChunk.Header) !Header {
         return Header{
             .header = chunk_header,
-            .string_count = try reader.readInt(u32, .Little),
-            .style_count = try reader.readInt(u32, .Little),
-            .flags = @as(Flags, @bitCast(try reader.readInt(u32, .Little))),
-            .strings_start = try reader.readInt(u32, .Little),
-            .styles_start = try reader.readInt(u32, .Little),
+            .string_count = try reader.readInt(u32, .little),
+            .style_count = try reader.readInt(u32, .little),
+            .flags = @as(Flags, @bitCast(try reader.readInt(u32, .little))),
+            .strings_start = try reader.readInt(u32, .little),
+            .styles_start = try reader.readInt(u32, .little),
         };
     }
 
     pub fn write(header: Header, writer: anytype) !void {
         try ResourceChunk.Header.write(writer);
-        try writer.writeInt(u32, header.string_count, .Little);
-        try writer.writeInt(u32, header.style_count, .Little);
-        try writer.writeInt(u32, @as(u32, @bitCast(header.flags)), .Little);
-        try writer.writeInt(u32, header.strings_start, .Little);
-        try writer.writeInt(u32, header.styles_start, .Little);
+        try writer.writeInt(u32, header.string_count, .little);
+        try writer.writeInt(u32, header.style_count, .little);
+        try writer.writeInt(u32, @as(u32, @bitCast(header.flags)), .little);
+        try writer.writeInt(u32, header.strings_start, .little);
+        try writer.writeInt(u32, header.styles_start, .little);
     }
 };
 
@@ -170,12 +170,12 @@ pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: Resou
             // Create slices from offsets
             try seek.seekTo(pos + header.header.header_size);
             for (string_offset) |*offset| {
-                offset.* = try reader.readInt(u32, .Little);
+                offset.* = try reader.readInt(u32, .little);
             }
 
             // Copy UTF8 buffer into memory
             for (0..string_buf.capacity) |_| {
-                string_buf.appendAssumeCapacity(try reader.readInt(u8, .Little));
+                string_buf.appendAssumeCapacity(try reader.readInt(u8, .little));
             }
 
             // Construct slices
@@ -205,12 +205,12 @@ pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: Resou
             // Create slices from offsets
             try seek.seekTo(pos + header.header.header_size);
             for (string_offset) |*offset| {
-                offset.* = try reader.readInt(u32, .Little);
+                offset.* = try reader.readInt(u32, .little);
             }
 
             // Copy UTF16 buffer into memory
             for (0..string_buf.capacity) |_| {
-                string_buf.appendAssumeCapacity(try reader.readInt(u16, .Little));
+                string_buf.appendAssumeCapacity(try reader.readInt(u16, .little));
             }
 
             // Construct slices
@@ -245,12 +245,12 @@ pub fn read(seek: anytype, reader: anytype, header: Header, string_buf: []u16, s
     // Copy UTF16 buffer into memory
     try seek.seekTo(8 + header.strings_start);
     for (string_buf) |*char| {
-        char.* = try reader.readInt(u16, .Little);
+        char.* = try reader.readInt(u16, .little);
     }
     // Create slices from offsets
     try seek.seekTo(8 + header.header.header_size);
     for (string_pool) |*string| {
-        const offset = try reader.readInt(u32, .Little);
+        const offset = try reader.readInt(u32, .little);
         std.debug.assert(offset % 2 == 0);
         var index = offset / 2;
         var len: usize = string_buf[index];

@@ -119,24 +119,24 @@ string_pool: ?*const StringPool,
 
 pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
     // Read number of bytes in the structure
-    const size = try reader.readInt(u16, .Little);
+    const size = try reader.readInt(u16, .little);
     _ = size;
     // Padding, should always be 0
-    const res0 = try reader.readInt(u8, .Little);
+    const res0 = try reader.readInt(u8, .little);
     _ = res0;
-    const datatype = @as(DataType, @enumFromInt(try reader.readInt(u8, .Little)));
-    // const raw_data = try reader.readInt(u32, .Little);
+    const datatype = @as(DataType, @enumFromInt(try reader.readInt(u8, .little)));
+    // const raw_data = try reader.readInt(u32, .little);
     const data: Data = switch (datatype) {
-        .Null => .{ .Null = @as(NullType, @enumFromInt(try reader.readInt(u32, .Little))) },
-        .Reference => .{ .Reference = try reader.readInt(u32, .Little) },
-        .Attribute => .{ .Attribute = try reader.readInt(u32, .Little) },
-        .String => .{ .String = StringPool.Ref{ .index = try reader.readInt(u32, .Little) } },
-        .Float => .{ .Float = @as(f32, @bitCast(try reader.readInt(u32, .Little))) },
+        .Null => .{ .Null = @as(NullType, @enumFromInt(try reader.readInt(u32, .little))) },
+        .Reference => .{ .Reference = try reader.readInt(u32, .little) },
+        .Attribute => .{ .Attribute = try reader.readInt(u32, .little) },
+        .String => .{ .String = StringPool.Ref{ .index = try reader.readInt(u32, .little) } },
+        .Float => .{ .Float = @as(f32, @bitCast(try reader.readInt(u32, .little))) },
         .Dimension => .{ .Dimension = dimension: {
             const description = try reader.readByte();
             var unit = @as(DimensionUnit, @enumFromInt(@as(u4, @truncate(description))));
             var radix = @as(Radix, @enumFromInt(@as(u4, @truncate(description >> 4))));
-            var value = try reader.readInt(i24, .Little);
+            var value = try reader.readInt(i24, .little);
             break :dimension .{
                 .unit = unit,
                 .radix = radix,
@@ -147,16 +147,16 @@ pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
             const description = try reader.readByte();
             var unit = @as(FractionUnit, @enumFromInt(@as(u4, @truncate(description))));
             var radix = @as(Radix, @enumFromInt(@as(u4, @truncate(description >> 4))));
-            var value = try reader.readInt(i24, .Little);
+            var value = try reader.readInt(i24, .little);
             break :fraction .{
                 .unit = unit,
                 .radix = radix,
                 .value = value,
             };
         } },
-        .DynReference => .{ .DynReference = try reader.readInt(u32, .Little) },
-        .DynAttribute => .{ .DynAttribute = try reader.readInt(u32, .Little) },
-        .IntBool => .{ .Int = .{ .Bool = try reader.readInt(u32, .Little) == 1 } },
+        .DynReference => .{ .DynReference = try reader.readInt(u32, .little) },
+        .DynAttribute => .{ .DynAttribute = try reader.readInt(u32, .little) },
+        .IntBool => .{ .Int = .{ .Bool = try reader.readInt(u32, .little) == 1 } },
         .IntDec,
         .IntHex,
         .IntColorARGB8,
@@ -165,7 +165,7 @@ pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
         .IntColorRGB4,
         => integer: {
             // TODO: preserve type
-            const value = try reader.readInt(u32, .Little);
+            const value = try reader.readInt(u32, .little);
             break :integer .{ .Int = .{ .Dec = value } };
         },
     };
@@ -177,10 +177,10 @@ pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
 }
 
 pub fn write(value: Value, writer: anytype) !void {
-    try writer.writeInt(u16, @intFromEnum(value.size), .Little);
-    try writer.writeInt(u8, value.res0, .Little);
-    try writer.writeInt(u8, @intFromEnum(value.datatype), .Little);
-    try writer.writeInt(u32, value.data, .Little);
+    try writer.writeInt(u16, @intFromEnum(value.size), .little);
+    try writer.writeInt(u8, value.res0, .little);
+    try writer.writeInt(u8, @intFromEnum(value.datatype), .little);
+    try writer.writeInt(u32, value.data, .little);
 }
 
 pub fn format(value: Value, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {

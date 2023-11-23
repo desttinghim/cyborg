@@ -48,7 +48,7 @@ const Header = struct {
     fn read(reader: anytype, header: ResourceChunk.Header) !Header {
         return Header{
             .header = header,
-            .package_count = try reader.readInt(u32, .Little),
+            .package_count = try reader.readInt(u32, .little),
         };
     }
 };
@@ -79,20 +79,20 @@ const Package = struct {
         var package: Package = undefined;
 
         package.header = header;
-        package.id = try reader.readInt(u32, .Little);
+        package.id = try reader.readInt(u32, .little);
         var name: [127:0]u16 = undefined;
         var index: usize = 0;
-        name[index] = try reader.readInt(u16, .Little);
+        name[index] = try reader.readInt(u16, .little);
         while (name[index] != 0) {
             index += 1;
-            name[index] = try reader.readInt(u16, .Little);
+            name[index] = try reader.readInt(u16, .little);
         }
         package.name = try alloc.dupe(u16, name[0..index]);
-        package.type_strings = try reader.readInt(u32, .Little);
-        package.last_public_type = try reader.readInt(u32, .Little);
-        package.key_strings = try reader.readInt(u32, .Little);
-        package.last_public_key = try reader.readInt(u32, .Little);
-        package.type_id_offset = try reader.readInt(u32, .Little);
+        package.type_strings = try reader.readInt(u32, .little);
+        package.last_public_type = try reader.readInt(u32, .little);
+        package.key_strings = try reader.readInt(u32, .little);
+        package.last_public_key = try reader.readInt(u32, .little);
+        package.type_id_offset = try reader.readInt(u32, .little);
 
         var type_specs = ArrayList(TypeSpec){};
         var table_types = ArrayList(TableType){};
@@ -223,19 +223,19 @@ const Config = extern struct {
     fn read(reader: anytype) !Config {
         var config: Config = undefined;
 
-        config.size = try reader.readInt(u32, .Little);
+        config.size = try reader.readInt(u32, .little);
         std.debug.assert(config.size == @sizeOf(Config));
-        config.imsi = @as(Imsi, @bitCast(try reader.readInt(u32, .Little)));
-        config.locale = @as(Locale, @bitCast(try reader.readInt(u32, .Little)));
-        config.screen_type = @as(ScreenType, @bitCast(try reader.readInt(u32, .Little)));
-        config.input = @as(Input, @bitCast(try reader.readInt(u32, .Little)));
-        config.screen_size = @as(ScreenSize, @bitCast(try reader.readInt(u32, .Little)));
-        config.version = @as(Version, @bitCast(try reader.readInt(u32, .Little)));
-        config.screen_config = @as(ScreenConfig, @bitCast(try reader.readInt(u32, .Little)));
-        config.screen_size_dp = @as(ScreenSizeDp, @bitCast(try reader.readInt(u32, .Little)));
+        config.imsi = @as(Imsi, @bitCast(try reader.readInt(u32, .little)));
+        config.locale = @as(Locale, @bitCast(try reader.readInt(u32, .little)));
+        config.screen_type = @as(ScreenType, @bitCast(try reader.readInt(u32, .little)));
+        config.input = @as(Input, @bitCast(try reader.readInt(u32, .little)));
+        config.screen_size = @as(ScreenSize, @bitCast(try reader.readInt(u32, .little)));
+        config.version = @as(Version, @bitCast(try reader.readInt(u32, .little)));
+        config.screen_config = @as(ScreenConfig, @bitCast(try reader.readInt(u32, .little)));
+        config.screen_size_dp = @as(ScreenSizeDp, @bitCast(try reader.readInt(u32, .little)));
         _ = try reader.read(&config.locale_script);
         _ = try reader.read(&config.locale_version);
-        config.screen_config2 = @as(ScreenConfig2, @bitCast(try reader.readInt(u32, .Little)));
+        config.screen_config2 = @as(ScreenConfig2, @bitCast(try reader.readInt(u32, .little)));
 
         return config;
     }
@@ -254,14 +254,14 @@ const TypeSpec = struct {
         _ = header;
         var type_spec: TypeSpec = undefined;
 
-        type_spec.id = try reader.readInt(u8, .Little);
-        type_spec.res0 = try reader.readInt(u8, .Little);
-        type_spec.res1 = try reader.readInt(u16, .Little);
-        type_spec.entry_count = try reader.readInt(u32, .Little);
+        type_spec.id = try reader.readInt(u8, .little);
+        type_spec.res0 = try reader.readInt(u8, .little);
+        type_spec.res1 = try reader.readInt(u16, .little);
+        type_spec.entry_count = try reader.readInt(u32, .little);
 
         type_spec.entry_indices = try alloc.alloc(u32, type_spec.entry_count);
         for (type_spec.entry_indices) |*entry| {
-            entry.* = try reader.readInt(u32, .Little);
+            entry.* = try reader.readInt(u32, .little);
         }
         // type_spec.entries = try alloc.alloc(TableType, type_spec.entry_count);
         // for (type_spec.entries) |*entry| {
@@ -286,11 +286,11 @@ const TableType = struct {
     fn read(seek: anytype, reader: anytype, pos: usize, header: ResourceChunk.Header, alloc: std.mem.Allocator) !TableType {
         var table_type: TableType = undefined;
 
-        table_type.id = try reader.readInt(u8, .Little);
-        table_type.flags = try reader.readInt(u8, .Little);
-        table_type.reserved = try reader.readInt(u16, .Little);
-        table_type.entry_count = try reader.readInt(u32, .Little);
-        table_type.entries_start = try reader.readInt(u32, .Little);
+        table_type.id = try reader.readInt(u8, .little);
+        table_type.flags = try reader.readInt(u8, .little);
+        table_type.reserved = try reader.readInt(u16, .little);
+        table_type.entry_count = try reader.readInt(u32, .little);
+        table_type.entries_start = try reader.readInt(u32, .little);
         table_type.config = try Config.read(reader);
 
         if (table_type.flags & 0x01 != 0) {
@@ -299,7 +299,7 @@ const TableType = struct {
             try seek.seekTo(pos + header.header_size);
             table_type.entry_indices = try ArrayList(u32).initCapacity(alloc, table_type.entry_count);
             for (0..table_type.entry_indices.capacity) |_| {
-                table_type.entry_indices.appendAssumeCapacity(try reader.readInt(u32, .Little));
+                table_type.entry_indices.appendAssumeCapacity(try reader.readInt(u32, .little));
             }
             try seek.seekTo(pos + table_type.entries_start);
             table_type.entries = try ArrayList(Entry).initCapacity(alloc, table_type.entry_count);
@@ -327,8 +327,8 @@ const Entry = struct {
     pub fn read(reader: anytype) !Entry {
         var entry: Entry = undefined;
 
-        entry.size = try reader.readInt(u16, .Little);
-        entry.flags = try reader.readInt(u16, .Little);
+        entry.size = try reader.readInt(u16, .little);
+        entry.flags = try reader.readInt(u16, .little);
         entry.key = try StringPool.Ref.read(reader);
         std.debug.assert(entry.flags & 0x0001 == 0);
         entry.value = try Value.read(reader, null);
