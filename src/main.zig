@@ -456,7 +456,7 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         const class_str = try classes.getString(classes.string_ids.items[classes.type_ids.items[id.class_idx].descriptor_idx]);
         const type_str = try classes.getString(classes.string_ids.items[classes.type_ids.items[id.type_idx].descriptor_idx]);
         const name_str = try classes.getString(classes.string_ids.items[id.name_idx]);
-        try std.fmt.format(stdout.writer(), "Field {}, {s}.{s}: {s}", .{ i, class_str.data, name_str.data, type_str.data });
+        try std.fmt.format(stdout.writer(), "Field {}, {s}.{s}: {s}\n", .{ i, class_str.data, name_str.data, type_str.data });
     }
 
     for (classes.method_ids.items, 0..) |id, i| {
