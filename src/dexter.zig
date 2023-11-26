@@ -36,9 +36,7 @@ pub fn main() !void {
         outfile_arg_opt = try parse_file_name(args[2], ".dex");
     }
 
-    if (outfile_arg_opt == null) @panic("Output filename is somehow missing - this is a bug with dexter, and should never happen");
-
-    const outfile_arg = outfile_arg_opt.?;
+    const outfile_arg = outfile_arg_opt orelse @panic("Output filename is somehow missing - this is a bug with dexter, and should never happen");
 
     std.debug.print("assembling input {s}{s} to output {s}{s}\n", .{ infile_arg.name, infile_arg.extension, outfile_arg.name, outfile_arg.extension });
 

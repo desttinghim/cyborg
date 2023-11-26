@@ -723,6 +723,7 @@ pub const Dex = struct {
     data: std.ArrayListUnmanaged(u8),
     link_data: std.ArrayListUnmanaged(u8),
     map_list: MapList,
+    class_data: std.ArrayListUnmanaged(ClassDataItem),
 
     pub fn readAlloc(seek: anytype, reader: anytype, allocator: std.mem.Allocator) !Dex {
         var dex: Dex = undefined;
@@ -772,15 +773,11 @@ pub const Dex = struct {
             dex.class_defs.appendAssumeCapacity(try ClassDefItem.read(reader));
         }
 
-        // TODO?
-        // Read the call site ids list
-        // NOTE: The call_site list does NOT have an offset specified in the header
-        // dex.call_site_ids = try std.ArrayListUnmanaged(CallSiteIdItem).initCapacity(allocator, dex.header.call_site_ids_size);
-        // for (0..dex.header.class_defs_size) |_| {
-        //     dex.call_site_ids.appendAssumeCapacity(try CallSiteIdItem.read(reader));
-        // }
-        // dex.call_site_ids = ;
-        // dex.method_handles = ;
+        dex.class_data = try std.ArrayListUnmanaged(ClassDataItem).initCapacity(allocator, dex.header.class_defs_size);
+        for (dex.class_defs.items) |class_def| {
+            try seek.seekTo(class_def.class_data_off);
+            dex.class_data.appendAssumeCapacity(try ClassDataItem.read(allocator, reader));
+        }
 
         // Read data into buffer
         try seek.seekTo(dex.header.data_off);
@@ -791,9 +788,6 @@ pub const Dex = struct {
             std.log.err("read {} bytes into dex.data", .{amount});
             return error.UnexpectedEOF;
         }
-
-        // TODO?
-        // dex.link_data = ;
 
         // Read the file map
         dex.map_list = try MapList.read(dex.header, seek, reader, allocator);
@@ -840,6 +834,28 @@ pub const Dex = struct {
             string_list[i] = try dex.getTypeString(dex.type_ids.items[type_item.type_idx]);
         }
         return string_list;
+    }
+
+    pub fn writeFieldString(dex: Dex, writer: anytype, field_id: u32) !void {
+        const id = dex.field_ids.items[field_id];
+        const class_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.class_idx].descriptor_idx]);
+        const type_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.type_idx].descriptor_idx]);
+        const name_str = try dex.getString(dex.string_ids.items[id.name_idx]);
+        try std.fmt.format(writer, "\t{s}.{s}: {s}\n", .{ class_str.data, name_str.data, type_str.data });
+    }
+
+    pub fn writeMethodString(dex: Dex, alloc: std.mem.Allocator, writer: anytype, method_id: u32) !void {
+        const id = dex.method_ids.items[method_id];
+        const class_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.class_idx].descriptor_idx]);
+        const name_str = try dex.getString(dex.string_ids.items[id.name_idx]);
+        const prototype = try dex.getPrototype(dex.proto_ids.items[id.proto_idx], alloc);
+        try std.fmt.format(writer, "\t{s}.{s}(", .{ class_str.data, name_str.data });
+        if (prototype.parameters) |parameters| {
+            for (try dex.getTypeStringList(parameters, alloc)) |type_string| {
+                try std.fmt.format(writer, "{s}", .{type_string.data});
+            }
+        }
+        try std.fmt.format(writer, "){s}\n", .{prototype.return_type.data});
     }
 };
 
@@ -1292,25 +1308,75 @@ const MethodHandleTypeCode = enum(u16) {
 };
 
 const ClassDataItem = struct {
-    static_fields_size: uleb128,
-    instance_fields_size: uleb128,
-    direct_methods_size: uleb128,
-    virtual_methods_size: uleb128,
-    static_fields: []EncodedField,
-    instance_fields: []EncodedField,
-    direct_methods: []EncodedMethod,
-    virtual_methods: []EncodedMethod,
+    static_fields: std.ArrayListUnmanaged(EncodedField),
+    instance_fields: std.ArrayListUnmanaged(EncodedField),
+    direct_methods: std.ArrayListUnmanaged(EncodedMethod),
+    virtual_methods: std.ArrayListUnmanaged(EncodedMethod),
+
+    pub fn read(alloc: std.mem.Allocator, reader: anytype) !ClassDataItem {
+        const static_fields_size = try std.leb.readULEB128(u32, reader);
+        const instance_fields_size = try std.leb.readULEB128(u32, reader);
+        const direct_methods_size = try std.leb.readULEB128(u32, reader);
+        const virtual_methods_size = try std.leb.readULEB128(u32, reader);
+
+        var static_fields = try std.ArrayListUnmanaged(EncodedField).initCapacity(alloc, static_fields_size);
+        var instance_fields = try std.ArrayListUnmanaged(EncodedField).initCapacity(alloc, instance_fields_size);
+        var direct_methods = try std.ArrayListUnmanaged(EncodedMethod).initCapacity(alloc, direct_methods_size);
+        var virtual_methods = try std.ArrayListUnmanaged(EncodedMethod).initCapacity(alloc, virtual_methods_size);
+
+        for (0..static_fields_size) |_| {
+            static_fields.appendAssumeCapacity(try EncodedField.read(reader));
+        }
+        for (0..instance_fields_size) |_| {
+            instance_fields.appendAssumeCapacity(try EncodedField.read(reader));
+        }
+        for (0..direct_methods_size) |_| {
+            direct_methods.appendAssumeCapacity(try EncodedMethod.read(reader));
+        }
+        for (0..virtual_methods_size) |_| {
+            virtual_methods.appendAssumeCapacity(try EncodedMethod.read(reader));
+        }
+
+        return .{
+            .static_fields = static_fields,
+            .instance_fields = instance_fields,
+            .direct_methods = direct_methods,
+            .virtual_methods = virtual_methods,
+        };
+    }
 };
 
 const EncodedField = struct {
-    field_idx_off: uleb128,
-    access_flags: uleb128,
+    /// Index into field_ids, encoded as difference from last item
+    field_idx_diff: u32,
+    access_flags: u32,
+
+    pub fn read(reader: anytype) !EncodedField {
+        const field_idx = try std.leb.readULEB128(u32, reader);
+        const access_flags = try std.leb.readULEB128(u32, reader);
+        return .{
+            .field_idx_diff = field_idx,
+            .access_flags = access_flags,
+        };
+    }
 };
 
 const EncodedMethod = struct {
+    /// Index into method_ids, encoded as difference from last item
     method_idx_diff: uleb128,
     access_flags: uleb128,
     code_off: uleb128,
+
+    pub fn read(reader: anytype) !EncodedMethod {
+        const method_idx = try std.leb.readULEB128(u32, reader);
+        const access_flags = try std.leb.readULEB128(u32, reader);
+        const code_off = try std.leb.readULEB128(u32, reader);
+        return .{
+            .method_idx_diff = method_idx,
+            .access_flags = access_flags,
+            .code_off = code_off,
+        };
+    }
 };
 
 const TypeList = struct {
