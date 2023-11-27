@@ -731,6 +731,32 @@ pub const Dex = struct {
         // Read the header
         dex.header = try HeaderItem.read(seek, reader);
 
+        try seek.seekTo(0);
+        const file_contents = try reader.readAllAlloc(allocator, dex.header.file_size);
+
+        // Compute checksum
+        const to_checksum = file_contents[12..];
+        const checksum = std.hash.Adler32.hash(to_checksum);
+        if (dex.header.checksum != checksum) {
+            std.log.err("checksum: file {} - calculated {}", .{
+                dex.header.checksum,
+                checksum,
+            });
+            return error.IncorrectChecksum;
+        }
+
+        // Compute SHA1 signature
+        const to_hash = to_checksum[20..];
+        var hash: [20]u8 = undefined;
+        std.crypto.hash.Sha1.hash(to_hash, &hash, .{});
+        if (!std.mem.eql(u8, &hash, &dex.header.signature)) {
+            std.log.err("File hash\t{}\n\texpected\t{}", .{
+                std.fmt.fmtSliceHexUpper(&hash),
+                std.fmt.fmtSliceHexUpper(&dex.header.signature),
+            });
+            return error.IncorrectSignature;
+        }
+
         // Read the string id list
         try seek.seekTo(dex.header.string_ids_off);
         dex.string_ids = try std.ArrayListUnmanaged(StringIdItem).initCapacity(allocator, dex.header.string_ids_size);

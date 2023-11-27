@@ -477,24 +477,27 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         const superclass = if (def.superclass_idx == dex.NO_INDEX) "null" else (try classes.getTypeString(classes.type_ids.items[def.superclass_idx])).data;
         const file_name = if (def.source_file_idx == dex.NO_INDEX) "null" else (try classes.getString(classes.string_ids.items[def.source_file_idx])).data;
         try std.fmt.format(stdout.writer(), "{} Class {s} extends {s} defined in {s}\n", .{ def.access_flags, class.data, superclass, file_name });
-        for (data.static_fields.items) |field| {
-            try std.fmt.format(stdout.writer(), "\tstatic {} {}\n", .{ field.field_idx_diff, field.access_flags });
+
+        var static_field_id: u32 = 0;
+        for (data.static_fields.items, 0..) |field, i| {
+            static_field_id = if (i == 0) field.field_idx_diff else static_field_id +% field.field_idx_diff;
+            try classes.writeFieldString(stdout.writer(), static_field_id);
         }
-        var field_id: u32 = 0;
+
+        var instance_field_id: u32 = 0;
         for (data.instance_fields.items, 0..) |field, i| {
-            // try std.fmt.format(stdout.writer(), "\tinstance {} {}\n", .{ field.field_idx_diff, field.access_flags });
-            field_id = if (i == 0) field.field_idx_diff else field_id +% field.field_idx_diff;
-            try classes.writeFieldString(stdout.writer(), field_id);
+            instance_field_id = if (i == 0) field.field_idx_diff else instance_field_id +% field.field_idx_diff;
+            try classes.writeFieldString(stdout.writer(), instance_field_id);
         }
+
         var direct_method_id: u32 = 0;
         for (data.direct_methods.items, 0..) |method, i| {
-            // try std.fmt.format(stdout.writer(), "\tdirect {} {} {}\n", .{ method.method_idx_diff, method.access_flags, method.code_off });
             direct_method_id = if (i == 0) method.method_idx_diff else direct_method_id +% method.method_idx_diff;
             try classes.writeMethodString(alloc, stdout.writer(), direct_method_id);
         }
+
         var virtual_method_id: u32 = 0;
         for (data.virtual_methods.items, 0..) |method, i| {
-            // try std.fmt.format(stdout.writer(), "\tvirtual {} {} {}\n", .{ method.method_idx_diff, method.access_flags, method.code_off });
             virtual_method_id = if (i == 0) method.method_idx_diff else virtual_method_id +% method.method_idx_diff;
             try classes.writeMethodString(alloc, stdout.writer(), virtual_method_id);
         }
