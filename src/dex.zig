@@ -3,12 +3,12 @@
 const std = @import("std");
 
 pub const Operation = union(Tag) {
-    nop,
+    nop: u8,
     move: vAvB,
-    @"move/from16": vAvB,
-    @"move/16": vAvB,
-    @"move/wide": vAvB,
-    @"move-wide/from16": vAvB,
+    @"move/from16": vAAvBBBB,
+    @"move/16": vAAAAvBBBB,
+    @"move-wide": vAvB,
+    @"move-wide/from16": vAAvBBBB,
     @"move-wide/16": vAvB,
     @"move-object": vAvB,
     @"move-object/from16": vAvB,
@@ -48,18 +48,18 @@ pub const Operation = union(Tag) {
     @"goto/32",
     @"packed-switch",
     @"sparse-switch",
-    @"cmpl-float",
-    @"cmpg-float",
-    @"cmpl-double",
-    @"cmpg-double",
-    @"cmp-long",
+    @"cmpl-float": vAAvBBvCC,
+    @"cmpg-float": vAAvBBvCC,
+    @"cmpl-double": vAAvBBvCC,
+    @"cmpg-double": vAAvBBvCC,
+    @"cmp-long": vAAvBBvCC,
     @"if-eq",
     @"if-ne",
     @"if-lt",
     @"if-ge",
     @"if-gt",
     @"if-le",
-    @"ifz-eq",
+    @"ifz-eq": vAApBBBB,
     @"ifz-ne",
     @"ifz-lt",
     @"ifz-ge",
@@ -79,33 +79,33 @@ pub const Operation = union(Tag) {
     @"aput-byte",
     @"aput-char",
     @"aput-short",
-    iget,
-    @"iget-wide",
-    @"iget-object",
-    @"iget-boolean",
-    @"iget-byte",
-    @"iget-char",
-    @"iget-short",
-    iput,
-    @"iput-wide",
-    @"iput-object",
-    @"iput-boolean",
-    @"iput-byte",
-    @"iput-char",
-    @"iput-short",
-    sget,
-    @"sget-wide",
-    @"sget-object",
-    @"sget-boolean",
-    @"sget-byte",
-    @"sget-char",
-    @"sget-short",
-    sput,
+    iget: vAvBcCCCC,
+    @"iget-wide": vAvBcCCCC,
+    @"iget-object": vAvBcCCCC,
+    @"iget-boolean": vAvBcCCCC,
+    @"iget-byte": vAvBcCCCC,
+    @"iget-char": vAvBcCCCC,
+    @"iget-short": vAvBcCCCC,
+    iput: vAvBcCCCC,
+    @"iput-wide": vAvBcCCCC,
+    @"iput-object": vAvBcCCCC,
+    @"iput-boolean": vAvBcCCCC,
+    @"iput-byte": vAvBcCCCC,
+    @"iput-char": vAvBcCCCC,
+    @"iput-short": vAvBcCCCC,
+    sget: vAAcBBBB,
+    @"sget-wide": vAAcBBBB,
+    @"sget-object": vAAcBBBB,
+    @"sget-boolean": vAAcBBBB,
+    @"sget-byte": vAAcBBBB,
+    @"sget-char": vAAcBBBB,
+    @"sget-short": vAAcBBBB,
+    sput: vAAcBBBB,
     @"sput-wide",
     @"sput-object",
     @"sput-boolean",
     @"sput-byte",
-    @"sput-char",
+    @"sput-char": vAAcBBBB,
     @"sput-short",
     @"invoke-virtual",
     @"invoke-super",
@@ -117,7 +117,7 @@ pub const Operation = union(Tag) {
     @"invoke-direct/range",
     @"invoke-static/range",
     @"invoke-interface/range",
-    @"neg-int",
+    @"neg-int": vAvB,
     @"not-int",
     @"neg-long",
     @"not-long",
@@ -139,10 +139,10 @@ pub const Operation = union(Tag) {
     @"int-to-char",
     @"int-to-short",
     @"add-int",
-    @"sub-int",
+    @"sub-int": vAAvBBvCC,
     @"mul-int",
     @"div-int",
-    @"rem-int",
+    @"rem-int": vAAvBBvCC,
     @"and-int",
     @"or-int",
     @"xor-int",
@@ -250,7 +250,7 @@ pub const Operation = union(Tag) {
         /// move-wide vA, vB
         /// A: destination register pair (4 bits)
         /// B: source register pair (4 bits)
-        @"move/wide" = 0x04,
+        @"move-wide" = 0x04,
         /// Move the contents of one register pair to another.
         /// NOTE: It is legal to move from vN to either vN-1 or vN+1, so implementations must arrange for both halves of a register pair to be read before anything is written.
         /// move-wide/from16 vAA, vBBBB
@@ -581,27 +581,71 @@ pub const Operation = union(Tag) {
     };
     pub const vAvB = struct { u4, u4 };
     pub const vAAvBBBB = struct { u8, u16 };
+    pub const vAAcBBBB = vAAvBBBB;
+    pub const vAApBBBB = vAAvBBBB;
     pub const vAAAAvBBBB = struct { u16, u16 };
     pub const vAA = struct { u8 };
     pub const vAlitB = struct { u4, u4 };
     pub const vAAlitBBBB = struct { u8, u16 };
     pub const vAAlitBBBBBBBB = struct { u8, u32 };
     pub const vAAlitBBBBBBBBBBBBBBBB = struct { u8, u32 };
-    pub const vAAcBBBB = struct { u8, u16 };
     pub const vAAcBBBBBBBB = struct { u8, u32 };
     pub const vAvBcCCCC = struct { u8, u8, u16 };
     pub const vAvBBBBvCvDvEvFvG = struct { u4, u16, u4, u4, u4, u4, u4 };
     pub const vAAvBBBBvCCCC = struct { u8, u16, u16 };
+    pub const vAAvBBvCC = struct { u8, u8, u8 };
 
     pub fn format(operation: Operation, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = options;
         _ = fmt;
         switch (operation) {
+            .nop => |byte| {
+                const psuedo_opcode = switch (byte) {
+                    0x1 => "(packed-switch)",
+                    0x2 => "(sparse-switch)",
+                    0x3 => "(fill-array-data)",
+                    else => "",
+                };
+                try writer.print("{s:<20} {x:>4} {s:<20}", .{ @tagName(operation), byte, psuedo_opcode });
+            },
+            .move => |args| {
+                try writer.print("{s:<20} {} {}", .{ @tagName(operation), args[0], args[1] });
+            },
+            .@"move/16" => |args| {
+                try writer.print("{s:<20} {} {}", .{ @tagName(operation), args[0], args[1] });
+            },
+            .@"move-wide" => |args| {
+                try writer.print("{s:<20} {} {}", .{ @tagName(operation), args[0], args[1] });
+            },
+            .@"move-wide/from16" => |args| {
+                try writer.print("{s:<20} {} {}", .{ @tagName(operation), args[0], args[1] });
+            },
+            .@"move-wide/16" => |args| {
+                try writer.print("{s:<20} {} {}", .{ @tagName(operation), args[0], args[1] });
+            },
             .@"move-result-object" => |args| {
                 try writer.print("{s:<20} {}", .{ @tagName(operation), args[0] });
             },
             .@"return-object" => |args| {
                 try writer.print("{s:<20} {}", .{ @tagName(operation), args[0] });
+            },
+            .@"cmpg-double" => |args| {
+                try writer.print("{s:<20} {} {}", .{ @tagName(operation), args[0], args[1] });
+            },
+            .@"ifz-eq" => |args| {
+                try writer.print("{s:<20} {} {}", .{ @tagName(operation), args[0], args[1] });
+            },
+            .@"iput-wide" => |args| {
+                try writer.print("{s:<20} {} {} {}", .{ @tagName(operation), args[0], args[1], args[2] });
+            },
+            .@"sget-object" => |args| {
+                try writer.print("{s:<20} {} {}", .{ @tagName(operation), args[0], args[1] });
+            },
+            .@"sget-byte" => |args| {
+                try writer.print("{s:<20} {} {}", .{ @tagName(operation), args[0], args[1] });
+            },
+            .@"sput-char" => |args| {
+                try writer.print("{s:<20} {} {}", .{ @tagName(operation), args[0], args[1] });
             },
             .@"invoke-direct" => |args| {
                 try writer.print("{s:<20} {} {} {} {} {} {}", .{
@@ -614,6 +658,12 @@ pub const Operation = union(Tag) {
                     args[5],
                 });
             },
+            .@"sub-int" => |args| {
+                try writer.print("{s:<20} {} {} {}", .{ @tagName(operation), args[0], args[1], args[2] });
+            },
+            .@"rem-int" => |args| {
+                try writer.print("{s:<20} {} {} {}", .{ @tagName(operation), args[0], args[1], args[2] });
+            },
             else => |tag| {
                 try writer.print("{s:<20}", .{@tagName(tag)});
             },
@@ -622,19 +672,81 @@ pub const Operation = union(Tag) {
 
     pub fn read(reader: anytype) !Operation {
         const op = try reader.readEnum(Tag, .little); // 1 byte
+        const byte = try reader.readByte();
         switch (op) {
+            .nop => {
+                return .{ .nop = byte };
+            },
+            .move => {
+                const a: u4 = @truncate(byte & 0xF);
+                const b: u4 = @truncate((byte & 0xF0) >> 4);
+                return .{ .move = .{ a, b } };
+            },
+            .@"move/16" => {
+                const a = try reader.readInt(u16, .little);
+                const b = try reader.readInt(u16, .little);
+                return .{ .@"move/16" = .{ a, b } };
+            },
+            .@"move/from16" => {
+                const b = try reader.readInt(u16, .little);
+                return .{ .@"move/from16" = .{ byte, b } };
+            },
+            .@"move-wide" => {
+                const a: u4 = @truncate(byte & 0xF);
+                const b: u4 = @truncate((byte & 0xF0) >> 4);
+                return .{ .@"move-wide" = .{ a, b } };
+            },
+            .@"move-wide/from16" => {
+                const b = try reader.readInt(u16, .little);
+                return .{ .@"move-wide/from16" = .{ byte, b } };
+            },
             .@"move-result-object" => {
-                const a = try reader.readInt(u8, .little);
-                return .{ .@"move-result-object" = .{a} };
+                return .{ .@"move-result-object" = .{byte} };
+            },
+            .@"return-void" => {
+                return .@"return-void";
             },
             .@"return-object" => {
+                return .{ .@"return-object" = .{byte} };
+            },
+            .@"cmpg-double" => {
+                const a = byte;
+                const b = try reader.readInt(u8, .little);
+                const c = try reader.readInt(u8, .little);
+                return .{ .@"cmpg-double" = .{ a, b, c } };
+            },
+            .@"ifz-eq" => {
                 const a = try reader.readInt(u8, .little);
-                return .{ .@"return-object" = .{a} };
+                const b = try reader.readInt(u16, .little);
+                return .{ .@"ifz-eq" = .{ a, b } };
+            },
+            .@"iget-byte" => {
+                const a: u4 = @truncate(byte & 0xF);
+                const b: u4 = @truncate((byte & 0xF0) >> 4);
+                const c = try reader.readInt(u16, .little);
+                return .{ .@"iget-byte" = .{ a, b, c } };
+            },
+            .@"iput-wide" => {
+                const a: u4 = @truncate(byte & 0xF);
+                const b: u4 = @truncate((byte & 0xF0) >> 4);
+                const c = try reader.readInt(u16, .little);
+                return .{ .@"iput-wide" = .{ a, b, c } };
+            },
+            .@"sget-object" => {
+                const b = try reader.readInt(u16, .little);
+                return .{ .@"sget-object" = .{ byte, b } };
+            },
+            .@"sget-byte" => {
+                const b = try reader.readInt(u16, .little);
+                return .{ .@"sget-byte" = .{ byte, b } };
+            },
+            .@"sput-char" => {
+                const b = try reader.readInt(u16, .little);
+                return .{ .@"sput-char" = .{ byte, b } };
             },
             .@"invoke-direct" => {
-                const hi = try reader.readInt(u8, .little);
-                const a: u4 = @truncate((hi & 0xF0) >> 4);
-                const g: u4 = @truncate((hi & 0xF));
+                const a: u4 = @truncate((byte & 0xF0) >> 4);
+                const g: u4 = @truncate((byte & 0xF));
                 const b: u16 = try reader.readInt(u16, .little);
                 const third = try reader.readInt(u16, .little);
                 const c: u4 = @truncate(third);
@@ -643,7 +755,23 @@ pub const Operation = union(Tag) {
                 const f: u4 = @truncate(third >> 12);
                 return .{ .@"invoke-direct" = .{ a, b, c, d, e, f, g } };
             },
+            .@"neg-int" => {
+                const a: u4 = @truncate(byte & 0xF);
+                const b: u4 = @truncate((byte & 0xF0) >> 4);
+                return .{ .@"neg-int" = .{ a, b } };
+            },
+            .@"sub-int" => {
+                const b = try reader.readInt(u8, .little);
+                const c = try reader.readInt(u8, .little);
+                return .{ .@"sub-int" = .{ byte, b, c } };
+            },
+            .@"rem-int" => {
+                const b = try reader.readInt(u8, .little);
+                const c = try reader.readInt(u8, .little);
+                return .{ .@"rem-int" = .{ byte, b, c } };
+            },
             else => {
+                std.log.err("Unimplemented operation {}", .{op});
                 return error.Unimplemented;
             },
         }
@@ -692,20 +820,6 @@ const FillArrayDataPayload = struct {
     size: u32,
     data: []u8,
 };
-
-// Data types used in the DEX file format specification
-const byte = i8;
-const ubyte = u8;
-const short = i16;
-const ushort = u16;
-const int = i32;
-const uint = u32;
-const long = i64;
-const ulong = u64;
-
-const sleb128 = i32;
-const uleb128 = u32;
-const uleb128p1 = u33;
 
 /// DEX file layout
 pub const Dex = struct {
@@ -912,16 +1026,19 @@ const Endianness = enum(u32) {
 pub const NO_INDEX: u32 = 0xffffffff;
 
 const AccessFlags = packed struct(u32) {
+    // Byte 1
     Public: bool,
     Private: bool,
     Protected: bool,
     Static: bool,
     Final: bool,
     Synchronized: bool,
-    Volatile: bool,
-    Bridge: bool,
-    Transient: bool,
-    Varargs: bool,
+    /// Volatile for fields, bridge for methods
+    VolatileOrBridge: bool,
+    /// Transient for fields, varargs for methods
+    TransientOrVarargs: bool,
+
+    // Byte 2
     Native: bool,
     Interface: bool,
     Abstract: bool,
@@ -930,32 +1047,32 @@ const AccessFlags = packed struct(u32) {
     Annotation: bool,
     Enum: bool,
     _unused: bool,
+
+    // Byte 3 & 4
     Constructor: bool,
     DeclaredSynchronized: bool,
-    _unused2: u12,
+    _unused2: u14,
 
     pub fn format(access_flags: AccessFlags, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
         _ = options;
-        if (access_flags.Public) _ = try writer.write("public");
-        if (access_flags.Private) _ = try writer.write(" private");
-        if (access_flags.Protected) _ = try writer.write(" protected");
-        if (access_flags.Static) _ = try writer.write(" static");
-        if (access_flags.Final) _ = try writer.write(" final");
-        if (access_flags.Synchronized) _ = try writer.write(" synchronized");
-        if (access_flags.Volatile) _ = try writer.write(" volatile");
-        if (access_flags.Bridge) _ = try writer.write(" bridge");
-        if (access_flags.Transient) _ = try writer.write(" transient");
-        if (access_flags.Varargs) _ = try writer.write(" varargs");
-        if (access_flags.Native) _ = try writer.write(" native");
-        if (access_flags.Interface) _ = try writer.write(" interface");
-        if (access_flags.Abstract) _ = try writer.write(" abstract");
-        if (access_flags.Strict) _ = try writer.write(" strict");
-        if (access_flags.Synthetic) _ = try writer.write(" synthetic");
-        if (access_flags.Annotation) _ = try writer.write(" annotation");
-        if (access_flags.Enum) _ = try writer.write(" enum");
-        if (access_flags.Constructor) _ = try writer.write(" constructor");
-        if (access_flags.DeclaredSynchronized) _ = try writer.write(" declared synchronized");
+        if (access_flags.Public) _ = try writer.write("public ");
+        if (access_flags.Private) _ = try writer.write("private ");
+        if (access_flags.Protected) _ = try writer.write("protected ");
+        if (access_flags.Static) _ = try writer.write("static ");
+        if (access_flags.Final) _ = try writer.write("final ");
+        if (access_flags.Synchronized) _ = try writer.write("synchronized ");
+        if (access_flags.VolatileOrBridge) _ = try writer.write("volatile/bridge ");
+        if (access_flags.TransientOrVarargs) _ = try writer.write("transient/varargs ");
+        if (access_flags.Native) _ = try writer.write("native ");
+        if (access_flags.Interface) _ = try writer.write("interface ");
+        if (access_flags.Abstract) _ = try writer.write("abstract ");
+        if (access_flags.Strict) _ = try writer.write("strict ");
+        if (access_flags.Synthetic) _ = try writer.write("synthetic ");
+        if (access_flags.Annotation) _ = try writer.write("annotation ");
+        if (access_flags.Enum) _ = try writer.write("enum ");
+        if (access_flags.Constructor) _ = try writer.write("constructor ");
+        if (access_flags.DeclaredSynchronized) _ = try writer.write("declared synchronized ");
     }
 };
 
@@ -991,19 +1108,19 @@ const ValueFormats = enum(u5) {
 };
 
 const EncodedArray = struct {
-    size: uleb128,
+    size: u32,
     values: []EncodedValue,
 };
 
 const EncodedAnnotation = struct {
-    type_idx: uleb128,
-    size: uleb128,
-    size: uleb128,
+    type_idx: u32,
+    size: u32,
+    size: u32,
     elements: []AnnotationElement,
 };
 
 const AnnotationElement = struct {
-    name_idx: uleb128,
+    name_idx: u32,
     value: EncodedValue,
 };
 
@@ -1200,7 +1317,7 @@ const StringIdItem = struct {
 
 const StringDataItem = struct {
     /// size of this string, in UTF-16 code units (which is the "string length" in many systems). That is, this is the decoded length of the string. (The encoded length is implied by the position of the 0 byte)
-    utf16_size: uleb128,
+    utf16_size: u32,
     /// a series of MUTF-8 code units (a.k.a. octets, a.k.a. bytes) followed by a byte of value 0.
     data: []u8,
 };
@@ -1375,11 +1492,11 @@ const ClassDataItem = struct {
 const EncodedField = struct {
     /// Index into field_ids, encoded as difference from last item
     field_idx_diff: u32,
-    access_flags: u32,
+    access_flags: AccessFlags,
 
     pub fn read(reader: anytype) !EncodedField {
         const field_idx = try std.leb.readULEB128(u32, reader);
-        const access_flags = try std.leb.readULEB128(u32, reader);
+        const access_flags: AccessFlags = @bitCast(try std.leb.readULEB128(u32, reader));
         return .{
             .field_idx_diff = field_idx,
             .access_flags = access_flags,
@@ -1389,13 +1506,13 @@ const EncodedField = struct {
 
 const EncodedMethod = struct {
     /// Index into method_ids, encoded as difference from last item
-    method_idx_diff: uleb128,
-    access_flags: uleb128,
-    code_off: uleb128,
+    method_idx_diff: u32,
+    access_flags: AccessFlags,
+    code_off: u32,
 
     pub fn read(reader: anytype) !EncodedMethod {
         const method_idx = try std.leb.readULEB128(u32, reader);
-        const access_flags = try std.leb.readULEB128(u32, reader);
+        const access_flags: AccessFlags = @bitCast(try std.leb.readULEB128(u32, reader));
         const code_off = try std.leb.readULEB128(u32, reader);
         return .{
             .method_idx_diff = method_idx,
@@ -1443,6 +1560,12 @@ pub const CodeItem = struct {
     insns: []u16,
     tries: ?[]TryItem,
     handlers: ?EncodedCatchHandlerList,
+
+    pub fn deinit(code_item: CodeItem, allocator: std.mem.Allocator) void {
+        allocator.free(code_item.insns);
+        const tries = code_item.tries orelse return;
+        allocator.free(tries);
+    }
 
     pub fn format(code_item: CodeItem, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
@@ -1524,7 +1647,7 @@ const TryItem = struct {
 };
 
 const EncodedCatchHandlerList = struct {
-    size: uleb128,
+    size: u32,
     list: []EncodedCatchHandler,
 
     pub fn read(reader: anytype, allocator: std.mem.Allocator) !EncodedCatchHandlerList {
@@ -1541,12 +1664,12 @@ const EncodedCatchHandlerList = struct {
 };
 
 const EncodedCatchHandler = struct {
-    size: sleb128,
+    size: i32,
     handlers: []EncodedTypeAddrPair,
-    catch_all_addr: ?uleb128,
+    catch_all_addr: ?u32,
 
     pub fn read(reader: anytype, allocator: std.mem.Allocator) !EncodedCatchHandler {
-        const size = try std.leb.readILEB128(sleb128, reader);
+        const size = try std.leb.readILEB128(i32, reader);
         const type_addr_pairs = try allocator.alloc(EncodedTypeAddrPair, @intCast(if (size < 0) -size else size));
         for (type_addr_pairs) |*pair| {
             pair.* = try EncodedTypeAddrPair.read(reader);
@@ -1561,8 +1684,8 @@ const EncodedCatchHandler = struct {
 };
 
 const EncodedTypeAddrPair = struct {
-    type_idx: uleb128,
-    addr: uleb128,
+    type_idx: u32,
+    addr: u32,
 
     pub fn read(reader: anytype) !EncodedTypeAddrPair {
         const t = try std.leb.readULEB128(u32, reader);
@@ -1575,9 +1698,9 @@ const EncodedTypeAddrPair = struct {
 };
 
 const DebugInfoItem = struct {
-    line_start: uleb128,
-    parameters_size: uleb128,
-    parameter_names: []uleb128p1,
+    line_start: u32,
+    parameters_size: u32,
+    parameter_names: []u32,
 };
 
 const DebugInfoItemBytes = enum(u8) {
@@ -1654,7 +1777,7 @@ const EncodedArrayItem = struct {
 const HiddenapiClassDataItem = struct {
     size: u32,
     offsets: []u32,
-    flags: []uleb128,
+    flags: []u32,
 };
 
 const FlagType = enum(u8) {

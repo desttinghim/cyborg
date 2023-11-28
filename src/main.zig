@@ -424,11 +424,6 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 
     for (classes.map_list.list) |list_item| {
         try std.fmt.format(stdout.writer(), "{}\n", .{list_item});
-        if (list_item.type == .code_item) {
-            try file.seekTo(list_item.offset);
-            const code_item = try dex.CodeItem.read(file.reader(), alloc);
-            try std.fmt.format(stdout.writer(), "code_item: {}\n", .{code_item});
-        }
     }
 
     for (classes.string_ids.items, 0..) |id, i| {
@@ -493,13 +488,29 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         var direct_method_id: u32 = 0;
         for (data.direct_methods.items, 0..) |method, i| {
             direct_method_id = if (i == 0) method.method_idx_diff else direct_method_id +% method.method_idx_diff;
+            try stdout.writer().print("{} ", .{method.access_flags});
             try classes.writeMethodString(alloc, stdout.writer(), direct_method_id);
+
+            if (method.code_off == 0) continue;
+
+            try file.seekTo(method.code_off);
+            const code_item = try dex.CodeItem.read(file.reader(), alloc);
+            defer code_item.deinit(alloc);
+            try stdout.writer().print("{}\n", .{code_item});
         }
 
         var virtual_method_id: u32 = 0;
         for (data.virtual_methods.items, 0..) |method, i| {
             virtual_method_id = if (i == 0) method.method_idx_diff else virtual_method_id +% method.method_idx_diff;
+            try stdout.writer().print("{} ", .{method.access_flags});
             try classes.writeMethodString(alloc, stdout.writer(), virtual_method_id);
+
+            if (method.code_off == 0) continue;
+
+            try file.seekTo(method.code_off);
+            const code_item = try dex.CodeItem.read(file.reader(), alloc);
+            defer code_item.deinit(alloc);
+            try stdout.writer().print("{}\n", .{code_item});
         }
     }
 }
