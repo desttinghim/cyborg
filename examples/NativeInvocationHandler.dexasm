@@ -1,0 +1,21 @@
+( This is a dexasm file )
+.class NativeInvocationHandler
+.extends java.lang.Object
+
+.import java.lang.Object                        Object
+.import java.lang.reflect.InvocationHandler     
+.import java.lang.reflect.Method                Method 
+
+.field ptr J
+
+.method public <init>(J)V
+    invoke-direct 1 java.lang.Object.<init> v0 v0 v0 v0
+    iput-wide v1 v0 NativeInvocationHandler.ptr
+    return-void
+
+.method public invoke(Object; Method; [Object;)Object;
+    invoke-direct 4 NativeInvocationHandler.invoke0 v0 v1 v2 v3
+    move-result-object v1
+    return-object v1
+
+.method private native invoke0(Object;Method;[Object;)Object;
