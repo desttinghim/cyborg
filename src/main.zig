@@ -6,6 +6,11 @@ const archive = @import("archive");
 pub const dex = @import("dex.zig");
 pub const binxml = @import("binxml.zig");
 pub const signing = @import("signing.zig");
+pub const dexter = @import("dexter.zig");
+
+comptime {
+    _ = dexter;
+}
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 

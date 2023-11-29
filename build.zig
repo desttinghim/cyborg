@@ -32,8 +32,10 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
+    const run_tests = b.addRunArtifact(main_tests);
+
     const test_step = b.step("test", "Run library tests");
-    test_step.dependOn(&main_tests.step);
+    test_step.dependOn(&run_tests.step);
 
     const exe = b.addExecutable(.{
         .name = "cyborg",

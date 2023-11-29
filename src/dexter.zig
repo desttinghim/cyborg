@@ -49,9 +49,34 @@ pub fn main() !void {
     const file_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, std.os.MAP.PRIVATE, file.handle, 0);
     defer std.os.munmap(file_map);
 
-    const TokenizeState = enum {
-        Whitespace,
-        Comment,
+    const tokens = try tokenize(alloc, file_map);
+    try stdout.writer().print("Token count: {}\nTag count: {}\n", .{
+        tokens.indices.items.len,
+        tokens.tags.items.len,
+    });
+
+    const module = try parseTokens(alloc, file_map, tokens);
+    for (module.classes.items) |class| {
+        if (class.extends) |extends| {
+            try stdout.writer().print("\nclass {s} extends {s}\n", .{ class.name, extends });
+        } else {
+            try stdout.writer().print("\nclass {s}\n", .{class.name});
+        }
+
+        for (class.fields.items) |field| {
+            try stdout.writer().print("\t{} {} {s}\n", .{ field.access_flags, field.type, field.name });
+        }
+
+        for (class.methods.items) |method| {
+            try stdout.writer().print("\t{} {} {s}\n", .{ method.access_flags, method.return_type, method.name });
+        }
+    }
+}
+
+const Tokens = struct {
+    indices: std.ArrayListUnmanaged(u32),
+    tags: std.ArrayListUnmanaged(Tag),
+    const Tag = enum {
         String,
         Literal,
         Directive,
@@ -59,8 +84,11 @@ pub fn main() !void {
         Instruction,
         Register,
     };
-
-    const TokenTag = enum {
+};
+pub fn tokenize(alloc: std.mem.Allocator, file_map: []const u8) !Tokens {
+    const TokenizeState = enum {
+        Whitespace,
+        Comment,
         String,
         Literal,
         Directive,
@@ -73,7 +101,7 @@ pub fn main() !void {
     _ = labels;
     var tokenize_state: TokenizeState = .Whitespace;
     var token_indices = try std.ArrayListUnmanaged(u32).initCapacity(alloc, std.math.maxInt(u16));
-    var token_tags = try std.ArrayListUnmanaged(TokenTag).initCapacity(alloc, std.math.maxInt(u16));
+    var token_tags = try std.ArrayListUnmanaged(Tokens.Tag).initCapacity(alloc, std.math.maxInt(u16));
     var token_start: u32 = 0;
     var comment_level: u8 = 0;
 
@@ -152,7 +180,13 @@ pub fn main() !void {
             token_start = @intCast(index);
         }
     }
+    return .{
+        .indices = token_indices,
+        .tags = token_tags,
+    };
+}
 
+pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Tokens) !Dalvik {
     // # Parsing
     // Takes the token list and tries to construct a dex file from them.
     // This is the code that will ensure type checking and construct a string pool
@@ -178,9 +212,7 @@ pub fn main() !void {
     var current_method: ?*Dalvik.Method = null;
     var current_instruction: ?*Dalvik.Instruction = null;
 
-    try stdout.writer().print("Token count: {}\nTag count: {}\n", .{ token_indices.items.len, token_tags.items.len });
-
-    for (token_indices.items, token_tags.items) |index, tag| {
+    for (tokens.indices.items, tokens.tags.items) |index, tag| {
         var end = index + 1;
         var char: u8 = file_map[end];
         while (true) : (char = file_map[end]) {
@@ -200,13 +232,11 @@ pub fn main() !void {
             end += 1;
         }
         const string = file_map[index..end];
-        // try stdout.writer().print("{s}\t{s}\n", .{ @tagName(tag), string });
         switch (state) {
             .top => {
                 switch (tag) {
                     .Instruction => unknown: {
                         const which = std.meta.stringToEnum(Dalvik.Instruction.Tag, string) orelse break :unknown;
-                        // try stdout.writer().print("Instruction is {}\n", .{which});
                         current_instruction = try current_method.?.code.addOne(alloc);
                         switch (which) {
                             .@"return-void" => {
@@ -229,7 +259,7 @@ pub fn main() !void {
                         }
                     },
                     else => {
-                        try stdout.writer().print("{s}\t{s}\n", .{ @tagName(tag), string });
+                        std.log.info("{s}\t{s}\n", .{ @tagName(tag), string });
                     },
                 }
             },
@@ -347,23 +377,7 @@ pub fn main() !void {
         } // switch (state)
     } // for (token_indices.items, token_tags.items)
 
-    try stdout.writer().print("Token parsing complete, parse state:  {}\n", .{state});
-
-    for (module.classes.items) |class| {
-        if (class.extends) |extends| {
-            try stdout.writer().print("\nclass {s} extends {s}\n", .{ class.name, extends });
-        } else {
-            try stdout.writer().print("\nclass {s}\n", .{class.name});
-        }
-
-        for (class.fields.items) |field| {
-            try stdout.writer().print("\t{} {} {s}\n", .{ field.access_flags, field.type, field.name });
-        }
-
-        for (class.methods.items) |method| {
-            try stdout.writer().print("\t{} {} {s}\n", .{ method.access_flags, method.return_type, method.name });
-        }
-    }
+    return module;
 }
 
 const ParsedName = struct {
@@ -647,7 +661,7 @@ const Dalvik = struct {
         /// The type of the value
         t: Type,
         /// if 0, it is NOT an array
-        array_dimensions: u8,
+        array_dimensions: u8 = 0,
 
         pub fn read(string: []const u8) !TypeValue {
             var index: usize = 0;
@@ -717,6 +731,40 @@ const Dalvik = struct {
         code: std.ArrayListUnmanaged(Instruction),
     };
 };
+
+test "NativeInvocationHandler" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const file = @embedFile("./NativeInvocationHandler.dexasm");
+    const tokens = try tokenize(arena.allocator(), file);
+    const module = try parseTokens(arena.allocator(), file, tokens);
+
+    try std.testing.expectEqual(@as(usize, 1), module.classes.items.len);
+    const class = module.classes.items[0];
+    try std.testing.expectEqual(dex.AccessFlags{}, class.access_flags);
+    try std.testing.expectEqualStrings("NativeInvocationHandler", class.name);
+    try std.testing.expectEqualStrings("java.lang.Object", class.extends.?);
+
+    try std.testing.expectEqual(@as(usize, 1), class.fields.items.len);
+    const field = class.fields.items[0];
+    try std.testing.expectEqual(dex.AccessFlags{ .Private = true }, field.access_flags);
+    try std.testing.expectEqual(Dalvik.TypeValue{ .t = .long }, field.type);
+    try std.testing.expectEqualStrings("ptr", field.name);
+
+    try std.testing.expectEqual(@as(usize, 3), class.methods.items.len);
+    const methods = class.methods.items;
+    try std.testing.expectEqual(dex.AccessFlags{
+        .Public = true,
+        .Constructor = true,
+    }, methods[0].access_flags);
+    try std.testing.expectEqual(Dalvik.TypeValue{ .t = .void }, methods[0].return_type);
+    try std.testing.expectEqualSlices(
+        Dalvik.TypeValue,
+        &[_]Dalvik.TypeValue{.{ .t = .long }},
+        methods[0].parameters.items,
+    );
+    try std.testing.expectEqualStrings("<init>", methods[0].name);
+}
 
 const std = @import("std");
 const dex = @import("dex.zig");
