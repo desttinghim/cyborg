@@ -426,15 +426,25 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         try std.fmt.format(stdout.writer(), "{}\n", .{list_item});
     }
 
-    for (classes.string_ids.items, 0..) |id, i| {
-        const str = try classes.getString(id);
-        try std.fmt.format(stdout.writer(), "String {}: {s}\n", .{ i, str.data });
+    var string_iter = classes.strings.keyIterator();
+    while (string_iter.next()) |string| {
+        try std.fmt.format(stdout.writer(), "String: {s}\n", .{string.*});
     }
 
-    for (classes.type_ids.items, 0..) |id, i| {
-        const str = try classes.getTypeString(id);
-        try std.fmt.format(stdout.writer(), "Type Descriptor {}: {s}\n", .{ i, str.data });
+    // for (classes.string_ids.items, 0..) |id, i| {
+    //     const str = try classes.getString(id);
+    //     try std.fmt.format(stdout.writer(), "String {}: {s}\n", .{ i, str.data });
+    // }
+
+    var type_iter = classes.types.keyIterator();
+    while (type_iter.next()) |t| {
+        try std.fmt.format(stdout.writer(), "Type Descriptor: {s}\n", .{t.*});
     }
+
+    // for (classes.type_ids.items, 0..) |id, i| {
+    //     const str = try classes.getTypeString(id);
+    //     try std.fmt.format(stdout.writer(), "Type Descriptor {}: {s}\n", .{ i, str.data });
+    // }
 
     for (classes.proto_ids.items, 0..) |id, i| {
         const prototype = try classes.getPrototype(id, alloc);
@@ -476,19 +486,21 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         var static_field_id: u32 = 0;
         for (data.static_fields.items, 0..) |field, i| {
             static_field_id = if (i == 0) field.field_idx_diff else static_field_id +% field.field_idx_diff;
+            try stdout.writer().print("\t{} ", .{field.access_flags});
             try classes.writeFieldString(stdout.writer(), static_field_id);
         }
 
         var instance_field_id: u32 = 0;
         for (data.instance_fields.items, 0..) |field, i| {
             instance_field_id = if (i == 0) field.field_idx_diff else instance_field_id +% field.field_idx_diff;
+            try stdout.writer().print("\t{} ", .{field.access_flags});
             try classes.writeFieldString(stdout.writer(), instance_field_id);
         }
 
         var direct_method_id: u32 = 0;
         for (data.direct_methods.items, 0..) |method, i| {
             direct_method_id = if (i == 0) method.method_idx_diff else direct_method_id +% method.method_idx_diff;
-            try stdout.writer().print("{} ", .{method.access_flags});
+            try stdout.writer().print("\t{} ", .{method.access_flags});
             try classes.writeMethodString(alloc, stdout.writer(), direct_method_id);
 
             if (method.code_off == 0) continue;
@@ -502,7 +514,7 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         var virtual_method_id: u32 = 0;
         for (data.virtual_methods.items, 0..) |method, i| {
             virtual_method_id = if (i == 0) method.method_idx_diff else virtual_method_id +% method.method_idx_diff;
-            try stdout.writer().print("{} ", .{method.access_flags});
+            try stdout.writer().print("\t{} ", .{method.access_flags});
             try classes.writeMethodString(alloc, stdout.writer(), virtual_method_id);
 
             if (method.code_off == 0) continue;

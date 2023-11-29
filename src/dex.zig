@@ -838,6 +838,9 @@ pub const Dex = struct {
     link_data: std.ArrayListUnmanaged(u8),
     map_list: MapList,
     class_data: std.ArrayListUnmanaged(ClassDataItem),
+    strings: std.StringHashMapUnmanaged(void),
+    string_data: std.ArrayListUnmanaged(u8),
+    types: std.StringHashMapUnmanaged(void),
 
     pub fn readAlloc(seek: anytype, reader: anytype, allocator: std.mem.Allocator) !Dex {
         var dex: Dex = undefined;
@@ -913,6 +916,7 @@ pub const Dex = struct {
             dex.class_defs.appendAssumeCapacity(try ClassDefItem.read(reader));
         }
 
+        // Read class data
         dex.class_data = try std.ArrayListUnmanaged(ClassDataItem).initCapacity(allocator, dex.header.class_defs_size);
         for (dex.class_defs.items) |class_def| {
             try seek.seekTo(class_def.class_data_off);
@@ -929,10 +933,45 @@ pub const Dex = struct {
             return error.UnexpectedEOF;
         }
 
+        // Default initialize strings hashmap
+        dex.strings = .{};
+        // dex.string_data = .{};
+
+        // Parse string ids into strings
+        for (dex.string_ids.items) |id| {
+            var string = try dex.getStringDirect(id, dex.data.items);
+            const result = try dex.strings.getOrPut(allocator, string);
+            if (!result.found_existing) {
+                const key_mem = try allocator.dupe(u8, string);
+                // try dex.string_data.append(allocator, key_mem);
+                result.key_ptr.* = key_mem;
+            }
+        }
+
+        dex.types = .{};
+        for (dex.type_ids.items) |id| {
+            var string = try dex.getTypeStringDirect(id, dex.data.items);
+            const result = try dex.types.getOrPut(allocator, string);
+            if (!result.found_existing) {
+                result.key_ptr.* = string;
+            }
+        }
+
         // Read the file map
         dex.map_list = try MapList.read(dex.header, seek, reader, allocator);
 
         return dex;
+    }
+
+    pub fn getStringDirect(dex: Dex, id: StringIdItem, data_buf: []const u8) ![]const u8 {
+        const offset = id.string_data_off - dex.header.data_off;
+        var fbs = std.io.fixedBufferStream(data_buf[offset..]);
+        const reader = fbs.reader();
+        const codepoints = try std.leb.readULEB128(u32, reader);
+        _ = codepoints;
+        const pos = fbs.getPos() catch unreachable;
+        const data = std.mem.sliceTo(data_buf[offset + pos ..], 0);
+        return data;
     }
 
     pub fn getString(dex: Dex, id: StringIdItem) !StringDataItem {
@@ -946,6 +985,12 @@ pub const Dex = struct {
             .utf16_size = codepoints,
             .data = data,
         };
+    }
+
+    pub fn getTypeStringDirect(dex: Dex, id: TypeIdItem, data_buf: []const u8) ![]const u8 {
+        const descriptor_idx = id.descriptor_idx;
+        if (descriptor_idx > dex.string_ids.items.len) return error.TypeStringOutOfBounds;
+        return dex.getStringDirect(dex.string_ids.items[descriptor_idx], data_buf);
     }
 
     pub fn getTypeString(dex: Dex, id: TypeIdItem) !StringDataItem {
@@ -981,7 +1026,7 @@ pub const Dex = struct {
         const class_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.class_idx].descriptor_idx]);
         const type_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.type_idx].descriptor_idx]);
         const name_str = try dex.getString(dex.string_ids.items[id.name_idx]);
-        try std.fmt.format(writer, "\t{s}.{s}: {s}\n", .{ class_str.data, name_str.data, type_str.data });
+        try std.fmt.format(writer, "{s}.{s}: {s}\n", .{ class_str.data, name_str.data, type_str.data });
     }
 
     pub fn writeMethodString(dex: Dex, alloc: std.mem.Allocator, writer: anytype, method_id: u32) !void {
@@ -989,7 +1034,7 @@ pub const Dex = struct {
         const class_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.class_idx].descriptor_idx]);
         const name_str = try dex.getString(dex.string_ids.items[id.name_idx]);
         const prototype = try dex.getPrototype(dex.proto_ids.items[id.proto_idx], alloc);
-        try std.fmt.format(writer, "\t{s}.{s}(", .{ class_str.data, name_str.data });
+        try std.fmt.format(writer, "{s}.{s}(", .{ class_str.data, name_str.data });
         if (prototype.parameters) |parameters| {
             for (try dex.getTypeStringList(parameters, alloc)) |type_string| {
                 try std.fmt.format(writer, "{s}", .{type_string.data});
@@ -997,6 +1042,32 @@ pub const Dex = struct {
         }
         try std.fmt.format(writer, "){s}\n", .{prototype.return_type.data});
     }
+
+    // # Construction functions:
+    // Used to build up a dex file in memory so it can be written out
+
+    /// Returns an empty dex file
+    pub fn init() Dex {
+        return .{
+            .string_ids = .{},
+            .type_ids = .{},
+            .proto_ids = .{},
+            .method_ids = .{},
+            .class_defs = .{},
+            .class_data = .{},
+            .call_site_ids = .{},
+            .method_handles = .{},
+            .data = .{},
+            .link_data = .{},
+            .map_list = undefined,
+            .strings = std.StringHashMapUnmanaged(void){},
+            .string_data = std.ArrayListUnmanaged(u8){},
+            .types = std.StringHashMapUnmanaged(void){},
+        };
+    }
+
+    // pub fn putType(dex: *Dex, allocator: std.mem.Allocator, type_string: []const u8) !void {}
+    // pub fn isType(dex: Dex, type_string: []const u8) bool {}
 };
 
 const Prototype = struct {
@@ -1025,33 +1096,33 @@ const Endianness = enum(u32) {
 /// Value to represent null indexes
 pub const NO_INDEX: u32 = 0xffffffff;
 
-const AccessFlags = packed struct(u32) {
+pub const AccessFlags = packed struct(u32) {
     // Byte 1
-    Public: bool,
-    Private: bool,
-    Protected: bool,
-    Static: bool,
-    Final: bool,
-    Synchronized: bool,
+    Public: bool = false,
+    Private: bool = false,
+    Protected: bool = false,
+    Static: bool = false,
+    Final: bool = false,
+    Synchronized: bool = false,
     /// Volatile for fields, bridge for methods
-    VolatileOrBridge: bool,
+    VolatileOrBridge: bool = false,
     /// Transient for fields, varargs for methods
-    TransientOrVarargs: bool,
+    TransientOrVarargs: bool = false,
 
     // Byte 2
-    Native: bool,
-    Interface: bool,
-    Abstract: bool,
-    Strict: bool,
-    Synthetic: bool,
-    Annotation: bool,
-    Enum: bool,
-    _unused: bool,
+    Native: bool = false,
+    Interface: bool = false,
+    Abstract: bool = false,
+    Strict: bool = false,
+    Synthetic: bool = false,
+    Annotation: bool = false,
+    Enum: bool = false,
+    _unused: bool = false,
 
     // Byte 3 & 4
-    Constructor: bool,
-    DeclaredSynchronized: bool,
-    _unused2: u14,
+    Constructor: bool = false,
+    DeclaredSynchronized: bool = false,
+    _unused2: u14 = 0,
 
     pub fn format(access_flags: AccessFlags, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
         _ = fmt;
@@ -1073,6 +1144,60 @@ const AccessFlags = packed struct(u32) {
         if (access_flags.Enum) _ = try writer.write("enum ");
         if (access_flags.Constructor) _ = try writer.write("constructor ");
         if (access_flags.DeclaredSynchronized) _ = try writer.write("declared synchronized ");
+    }
+
+    const FlagEnum = enum {
+        public,
+        private,
+        protected,
+        static,
+        final,
+        synchronized,
+        @"volatile",
+        bridge,
+        transient,
+        varargs,
+        native,
+        interface,
+        abstract,
+        strict,
+        synthetic,
+        annotation,
+        @"enum",
+        constructor,
+        DeclaredSynchronized,
+    };
+
+    /// Takes an AccessFlags struct and a single token as input, and returns the AccessFlags
+    /// struct with the additional flag from the parsed the token. Returns an error if the
+    /// token is not a valid access flag.
+    pub fn addFromString(access_flags: AccessFlags, string: []const u8) !AccessFlags {
+        var updated = access_flags;
+        var buffer: [256]u8 = undefined;
+        const lower_string = std.ascii.lowerString(&buffer, string);
+        var flag = std.meta.stringToEnum(FlagEnum, lower_string) orelse return error.NotAnAccessFlag;
+
+        switch (flag) {
+            .public => updated.Public = true,
+            .private => updated.Private = true,
+            .protected => updated.Protected = true,
+            .static => updated.Static = true,
+            .final => updated.Final = true,
+            .synchronized => updated.Synchronized = true,
+            .@"volatile", .bridge => updated.VolatileOrBridge = true,
+            .transient, .varargs => updated.TransientOrVarargs = true,
+            .native => updated.Native = true,
+            .interface => updated.Interface = true,
+            .abstract => updated.Abstract = true,
+            .strict => updated.Strict = true,
+            .synthetic => updated.Synthetic = true,
+            .annotation => updated.Annotation = true,
+            .@"enum" => updated.Enum = true,
+            .constructor => updated.Constructor = true,
+            .DeclaredSynchronized => updated.DeclaredSynchronized = true,
+        }
+
+        return updated;
     }
 };
 
