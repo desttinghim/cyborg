@@ -1125,7 +1125,7 @@ pub const Dex = struct {
         if (class_def > dex.header.class_defs_size) return error.OutOfBounds;
         const offset = dex.header.class_defs_off + class_def * 8;
         if (offset > dex.file_buffer.len) return error.OutOfBounds;
-        const slice = dex.file_buffer[offset..][0..8];
+        const slice = dex.file_buffer[offset..][0..32];
         return .{
             .class_idx = std.mem.readInt(u32, slice[0..4], dex.header.endian_tag),
             .access_flags = @bitCast(std.mem.readInt(u32, slice[4..][0..4], dex.header.endian_tag)),

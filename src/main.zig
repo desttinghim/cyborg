@@ -490,12 +490,19 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         }
     }
 
-    // {
-    //     var i: usize = 0;
-    //     var class_iter = dexfile.classIterator();
-    //     while (class_iter.next()) |class| : (i += 1) {
-    //     }
-    // }
+    {
+        var i: usize = 0;
+        var class_def_iter = dexfile.classDefIterator();
+        while (class_def_iter.next()) |class| : (i += 1) {
+            const class_str = try dexfile.getTypeString(class.class_idx);
+            if (class.superclass_idx != dex.NO_INDEX) {
+                const superclass_str = try dexfile.getTypeString(class.superclass_idx);
+                try std.fmt.format(stdout.writer(), "Class {s} extends {s}\n", .{ class_str, superclass_str });
+            } else {
+                try std.fmt.format(stdout.writer(), "Class {s}\n", .{class_str});
+            }
+        }
+    }
     // for (classes.class_defs.items, classes.class_data.items) |def, data| {
     //     const class = try classes.getTypeString(classes.type_ids.items[def.class_idx]);
     //     const superclass = if (def.superclass_idx == dex.NO_INDEX) "null" else (try classes.getTypeString(classes.type_ids.items[def.superclass_idx])).data;
