@@ -821,26 +821,212 @@ const FillArrayDataPayload = struct {
     data: []u8,
 };
 
-/// DEX file layout
+/// Container type for working with the DEX file format
+/// See `Dalvik.Module` for an in-memory representation that allows
 pub const Dex = struct {
+    /// The DEX file read into memory that we will be querying
+    file_buffer: []const u8,
     /// the header
     header: HeaderItem,
     /// string identifiers list. These are identifiers for all the strings used by this file, either for internal naming (e.g. type descriptors) or as constant objects referred to by code. This list must be sorted by string contents, using UTF-16 code point values (not in a locale-sensitive manner), and it must not contain any duplicate entries.
-    string_ids: std.ArrayListUnmanaged(StringIdItem),
-    type_ids: std.ArrayListUnmanaged(TypeIdItem),
-    proto_ids: std.ArrayListUnmanaged(ProtoIdItem),
-    field_ids: std.ArrayListUnmanaged(FieldIdItem),
-    method_ids: std.ArrayListUnmanaged(MethodIdItem),
-    class_defs: std.ArrayListUnmanaged(ClassDefItem),
-    call_site_ids: std.ArrayListUnmanaged(CallSiteIdItem),
-    method_handles: std.ArrayListUnmanaged(MethodHandleItem),
-    data: std.ArrayListUnmanaged(u8),
-    link_data: std.ArrayListUnmanaged(u8),
-    map_list: MapList,
-    class_data: std.ArrayListUnmanaged(ClassDataItem),
-    strings: std.StringHashMapUnmanaged(void),
-    string_data: std.ArrayListUnmanaged(u8),
-    types: std.StringHashMapUnmanaged(void),
+    // string_ids: std.ArrayListUnmanaged(StringIdItem),
+    // type_ids: std.ArrayListUnmanaged(TypeIdItem),
+    // proto_ids: std.ArrayListUnmanaged(ProtoIdItem),
+    // field_ids: std.ArrayListUnmanaged(FieldIdItem),
+    // method_ids: std.ArrayListUnmanaged(MethodIdItem),
+    // class_defs: std.ArrayListUnmanaged(ClassDefItem),
+    // call_site_ids: std.ArrayListUnmanaged(CallSiteIdItem),
+    // method_handles: std.ArrayListUnmanaged(MethodHandleItem),
+    // data: std.ArrayListUnmanaged(u8),
+    // link_data: std.ArrayListUnmanaged(u8),
+    // map_list: MapList,
+    // class_data: std.ArrayListUnmanaged(ClassDataItem),
+    // strings: std.StringHashMapUnmanaged(void),
+    // string_data: std.ArrayListUnmanaged(u8),
+    // types: std.StringHashMapUnmanaged(void),
+
+    /// Caller owns `file_buffer` memory. The lifetime of `file_buffer` should match or exceed
+    /// the lifetime of the `Dex` struct.
+    pub fn initFromSlice(file_buffer: []const u8) !Dex {
+        // Verify the passed file is a valid DEX file by parsing the header
+        const header = try HeaderItem.parse(file_buffer);
+        return Dex{
+            .file_buffer = file_buffer,
+            .header = header,
+        };
+    }
+
+    /// Caller owns memory stored in `file_buffer`.
+    /// Add `defer allocator.free(dex.file_buffer);` to your code to clean up properly.
+    pub fn initFromReader(allocator: std.mem.Allocator, reader: anytype) !Dex {
+        const file = try reader.readAllAlloc(allocator, std.math.maxInt(u32));
+        errdefer allocator.free(file);
+
+        return try initFromSlice(file);
+    }
+
+    pub const CreateOptions = struct {
+        endian: std.builtin.Endian = .little,
+    };
+    /// Writes a new DEX file into memory from the passed `Dalvik.Module`.
+    // pub fn createFromModule(allocator: std.mem.Allocator, module: dalvik.Module, opt: CreateOptions) !Dex {
+    //     var size_estimate: usize = 0;
+
+    //     // ArrayList of data section, to be constructed
+    //     var data = std.ArrayList(u8).init(allocator);
+    //     errdefer data.deinit();
+    //     const data_writer = data.writer();
+
+    //     // Construct string pool and string id list. String data is in the data section,
+    //     // while string ids are in the string_id section.
+    //     const string_data_offset = data.items.len;
+    //     var string_data_offsets = std.StringArrayHashMap(u32).init(allocator);
+    //     errdefer string_data_offset.deinit();
+    //     var string_iter = module.getStringIterator();
+    //     while (string_iter.next()) |string| {
+    //         const current_offset = data.items.len;
+    //         // Save offset into arrayhashmap and assert that the current string
+    //         // does not already exist.
+    //         try string_data_offsets.putNoClobber(string, current_offset);
+
+    //         const count = try std.unicode.utf8CountCodepoints();
+    //         // Write the length of the string in unicode codepoints
+    //         // TODO: the DEX file spec says the count is in utf16 codepoints, what
+    //         // does this mean?
+    //         try std.leb.writeULEB128(data_writer, count);
+    //         // Write the string itself
+    //         try data.appendSlice(string);
+    //     }
+
+    //     // Construct type id list
+    //     const type_offset = data.items.len;
+    //     var type_offsets = std.AutoArrayHashMap(dalvik.TypeValue, u32).init(allocator);
+    //     errdefer type_offsets.deinit();
+    //     var type_iter = module.getTypeIterator();
+    //     while (type_iter.next()) |t| {
+    //         const current_offset = data.items.len;
+    //         type_offsets.putNoClobber(t, current_offset);
+
+    //         const string = try t.getString(allocator);
+    //         defer allocator.free(string);
+    //         const string_index = string_data_offset.getIndex(string) orelse return error.MissingTypeString;
+
+    //         try data_writer.writeInt(u32, string_index, opt.endian);
+    //     }
+
+    //     // Construct proto list
+    //     var proto_offsets = std.AutoArrayHashMap(dalvik.Method, u32).init(allocator);
+    //     errdefer proto_offsets.deinit();
+
+    //     // Construct field id list
+    //     var field_offsets = std.AutoArrayHashMap(dalvik.Field, u32).init(allocator);
+    //     errdefer field_offsets.deinit();
+
+    //     // Construct method id list
+    //     var method_offsets = std.AutoArrayHashMap(dalvik.Method, u32).init(allocator);
+    //     errdefer method_offsets.deinit();
+
+    //     // Construct class definition list
+    //     var class_offsets = std.AutoArrayHashMap(dalvik.Class, u32).init(allocator);
+    //     errdefer class_offsets.deinit();
+
+    //     // Construct call site id list
+    //     // TODO: WTF is a call site in a DEX file?
+    //     var call_site_offsets = std.AutoArrayHashMap(dalvik.CallSite, u32).init(allocator);
+    //     errdefer call_site_offsets.deinit();
+
+    //     // Construct method handle list
+    //     // TODO: WTF is a method handle in a DEX file?
+    //     var method_handle_offsets = std.AutoArrayHashMap(dalvik.MethodHandle, u32).init(allocator);
+    //     errdefer method_handle_offsets.deinit();
+
+    //     // Construct map
+    //     const map_offset = data.items.len;
+    //     var map = std.ArrayList(MapItem).init(allocator);
+    //     {
+    //         // Should be 12 items long and in order
+    //         // 1. Header
+    //         try map.append(.{
+    //             .type = .header_item,
+    //             .size = 1,
+    //             .offset = 0,
+    //         });
+    //         size_estimate += 0x70;
+
+    //         // 2. String ids
+    //         try map.append(.{
+    //             .type = .string_id_item,
+    //             .size = string_data_offsets.count(),
+    //             .offset = size_estimate,
+    //         });
+    //         size_estimate += 0x04 * string_data_offsets.count();
+
+    //         // 3. Type ids
+    //         try map.append(.{
+    //             .type = .type_id_item,
+    //             .size = type_offsets.count(),
+    //             .offset = size_estimate,
+    //         });
+    //         size_estimate += 0x04 * string_data_offsets.count();
+
+    //         // 4. Proto ids
+    //         try map.append(.{
+    //             .type = .proto_id_item,
+    //             .size = proto_offsets.count(),
+    //             .offset = size_estimate,
+    //         });
+    //         size_estimate += 0x0c * proto_offsets.count();
+
+    //         // 5. Field ids
+    //         try map.append(.{
+    //             .type = .field_id_item,
+    //             .size = field_offsets.count(),
+    //             .offset = size_estimate,
+    //         });
+    //         size_estimate += 0x0c * field_offsets.count();
+
+    //         // 6. Method ids
+    //         try map.append(.{
+    //             .type = .method_id_item,
+    //             .size = method_offsets.count(),
+    //             .offset = size_estimate,
+    //         });
+    //         size_estimate += 0x0c * method_offsets.count();
+
+    //         // 7. Class definitions
+    //         try map.append(.{
+    //             .type = .method_id_item,
+    //             .size = method_offsets.count(),
+    //             .offset = size_estimate,
+    //         });
+    //         size_estimate += 0x0c * method_offsets.count();
+
+    //         // 8. Call site ids
+    //         // 9. Method handles
+    //         // 10. Map list
+    //         // 11. Type list
+    //         // 12. Annotation set ref list
+    //         // 13. Annotation set item
+    //     }
+
+    //     // Construct constant pools
+    //     var constant_pools = std.ArrayList(u8).init(allocator);
+    //     errdefer constant_pools.deinit();
+    //     const pool_writer = constant_pools.writer();
+
+    //     // Write magic bytes
+    //     // Reserve space for checksum, save slice
+    //     // Reserve space for SHA1 signature, save slice
+    //     // Write header size (defined to be a constant 0x70)
+    //     // Write endian constant
+
+    //     // Linking: size and offset (0 size if none)
+
+    //     return Dex{
+    //         .file_buffer = file_buffer,
+    //         .header = header,
+    //     };
+    // }
 
     pub fn readAlloc(seek: anytype, reader: anytype, allocator: std.mem.Allocator) !Dex {
         var dex: Dex = undefined;
@@ -963,111 +1149,140 @@ pub const Dex = struct {
         return dex;
     }
 
-    pub fn getStringDirect(dex: Dex, id: StringIdItem, data_buf: []const u8) ![]const u8 {
-        const offset = id.string_data_off - dex.header.data_off;
-        var fbs = std.io.fixedBufferStream(data_buf[offset..]);
+    pub fn getString(dex: Dex, id: usize) ![]const u8 {
+        if (id > dex.file_buffer) return error.StringIdOutOfBounds;
+        const offset = id.string_data_off;
+        const to_read = dex.file_buffer[offset..];
+        var fbs = std.io.fixedBufferStream(to_read);
         const reader = fbs.reader();
-        const codepoints = try std.leb.readULEB128(u32, reader);
-        _ = codepoints;
+        const stored_codepoints = try std.leb.readULEB128(u32, reader);
         const pos = fbs.getPos() catch unreachable;
-        const data = std.mem.sliceTo(data_buf[offset + pos ..], 0);
+        const data = std.mem.sliceTo(to_read[pos..], 0);
+
+        // Assert that the number of stored codepoints equals the utf8 codepoint count
+        const codepoints = try std.unicode.utf8CountCodepoints(data);
+        std.debug.assert(stored_codepoints == codepoints);
+
         return data;
     }
 
-    pub fn getString(dex: Dex, id: StringIdItem) !StringDataItem {
-        const offset = id.string_data_off - dex.header.data_off;
-        var fbs = std.io.fixedBufferStream(dex.data.items[offset..]);
-        const reader = fbs.reader();
-        const codepoints = try std.leb.readULEB128(u32, reader);
-        const pos = fbs.getPos() catch unreachable;
-        const data = std.mem.sliceTo(dex.data.items[offset + pos ..], 0);
-        return StringDataItem{
-            .utf16_size = codepoints,
-            .data = data,
-        };
+    pub fn getType(dex: Dex, id: usize) !usize {
+        const offset = dex.header.type_id_offset + (id * 0x04);
+        if (offset > dex.file_buffer.len) return error.OutOfBounds;
+        const type_slice = dex.file_buffer[offset..][0..4];
+        const string_index = try std.mem.readInt(u32, type_slice, dex.endian);
+        return string_index;
     }
 
-    pub fn getTypeStringDirect(dex: Dex, id: TypeIdItem, data_buf: []const u8) ![]const u8 {
-        const descriptor_idx = id.descriptor_idx;
-        if (descriptor_idx > dex.string_ids.items.len) return error.TypeStringOutOfBounds;
-        return dex.getStringDirect(dex.string_ids.items[descriptor_idx], data_buf);
+    pub fn getTypeString(dex: Dex, id: usize) ![]const u8 {
+        return dex.getString(dex.getType(id));
     }
 
-    pub fn getTypeString(dex: Dex, id: TypeIdItem) !StringDataItem {
-        const descriptor_idx = id.descriptor_idx;
-        if (descriptor_idx > dex.string_ids.items.len) return error.TypeStringOutOfBounds;
-        return dex.getString(dex.string_ids.items[descriptor_idx]);
-    }
+    pub fn getProto(dex: Dex, id: usize) !Prototype {
+        const offset = dex.header.proto_id_offset + (id * 0x0c);
+        if (offset > dex.file_buffer.len) return error.OutOfBounds;
 
-    pub fn getPrototype(dex: Dex, id: ProtoIdItem, allocator: std.mem.Allocator) !Prototype {
-        const parameters = if (id.parameters_off == 0) null else parameters: {
-            const offset = id.parameters_off - dex.header.data_off;
-            var fbs = std.io.fixedBufferStream(dex.data.items[offset..]);
-            const reader = fbs.reader();
-            break :parameters try TypeList.read(reader, allocator);
-        };
+        const proto_slice = dex.file_buffer[offset..][0..0xc];
+
+        const shorty_idx = std.mem.readInt(u32, proto_slice[0..4], dex.endian);
+        const return_type_idx = std.mem.readInt(u32, proto_slice[4..8], dex.endian);
+        const parameters_off = std.mem.readInt(u32, proto_slice[8..12], dex.endian);
         return Prototype{
-            .shorty = try dex.getString(dex.string_ids.items[id.shorty_idx]),
-            .return_type = try dex.getTypeString(dex.type_ids.items[id.return_type_idx]),
-            .parameters = parameters,
+            .shorty_idx = shorty_idx,
+            .return_type_idx = return_type_idx,
+            .parameters_off = parameters_off,
         };
     }
 
-    pub fn getTypeStringList(dex: Dex, type_list: TypeList, allocator: std.mem.Allocator) ![]StringDataItem {
-        var string_list = try allocator.alloc(StringDataItem, type_list.size);
-        for (type_list.list, 0..) |type_item, i| {
-            string_list[i] = try dex.getTypeString(dex.type_ids.items[type_item.type_idx]);
+    // pub const TypeListIterator = struct {
+    //     /// Offset from the beginning of the file to the
+    //     /// TypeList data
+    //     offset: usize,
+    //     pub fn next(iter: *TypeListIterator) ?Type {
+    //         // TODO
+    //     }
+    // };
+    // pub fn getTypeListIterator(dex: Dex, type_list_offset: usize) !TypeListIterator {
+    //     // TODO
+    // }
+
+    // pub fn getField(dex: Dex, field_id: usize) FieldIdItem {}
+
+    // pub fn getMethod(dex: Dex, method_id: usize) MethodIdItem {}
+
+    pub const MapIterator = struct {
+        dex: *const Dex,
+        list_size: usize,
+        index: usize,
+        pub fn next(iter: *MapIterator) ?MapItem {
+            if (iter.index >= iter.list_size) return null;
+            const offset = iter.dex.header.map_off + 4 + (iter.index * 12);
+            iter.index += 1;
+            return MapItem.fromSlice(iter.dex.file_buffer[offset..][0..12], iter.dex.header.endian_tag);
         }
-        return string_list;
-    }
-
-    pub fn writeFieldString(dex: Dex, writer: anytype, field_id: u32) !void {
-        const id = dex.field_ids.items[field_id];
-        const class_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.class_idx].descriptor_idx]);
-        const type_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.type_idx].descriptor_idx]);
-        const name_str = try dex.getString(dex.string_ids.items[id.name_idx]);
-        try std.fmt.format(writer, "{s}.{s}: {s}\n", .{ class_str.data, name_str.data, type_str.data });
-    }
-
-    pub fn writeMethodString(dex: Dex, alloc: std.mem.Allocator, writer: anytype, method_id: u32) !void {
-        const id = dex.method_ids.items[method_id];
-        const class_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.class_idx].descriptor_idx]);
-        const name_str = try dex.getString(dex.string_ids.items[id.name_idx]);
-        const prototype = try dex.getPrototype(dex.proto_ids.items[id.proto_idx], alloc);
-        try std.fmt.format(writer, "{s}.{s}(", .{ class_str.data, name_str.data });
-        if (prototype.parameters) |parameters| {
-            for (try dex.getTypeStringList(parameters, alloc)) |type_string| {
-                try std.fmt.format(writer, "{s}", .{type_string.data});
-            }
-        }
-        try std.fmt.format(writer, "){s}\n", .{prototype.return_type.data});
-    }
-
-    // # Construction functions:
-    // Used to build up a dex file in memory so it can be written out
-
-    /// Returns an empty dex file
-    pub fn init() Dex {
+    };
+    pub fn mapIterator(dex: *const Dex) MapIterator {
+        const offset = dex.header.map_off;
+        const size_slice = dex.file_buffer[offset..][0..4];
+        const list_size = std.mem.readInt(u32, size_slice, dex.header.endian_tag);
         return .{
-            .string_ids = .{},
-            .type_ids = .{},
-            .proto_ids = .{},
-            .method_ids = .{},
-            .class_defs = .{},
-            .class_data = .{},
-            .call_site_ids = .{},
-            .method_handles = .{},
-            .data = .{},
-            .link_data = .{},
-            .map_list = undefined,
-            .strings = std.StringHashMapUnmanaged(void){},
-            .string_data = std.ArrayListUnmanaged(u8){},
-            .types = std.StringHashMapUnmanaged(void){},
+            .dex = dex,
+            .list_size = list_size,
+            .index = 0,
         };
     }
 
-    // pub fn putType(dex: *Dex, allocator: std.mem.Allocator, type_string: []const u8) !void {}
-    // pub fn isType(dex: Dex, type_string: []const u8) bool {}
+    // pub const StringIterator = struct {
+    //     string_idx: usize,
+    // };
+    // pub fn stringIterator() StringIterator {}
+
+    // pub const TypeIterator = struct {
+    //     type_idx: usize,
+    // };
+    // pub fn typeIterator() TypeIterator {}
+
+    // pub const ProtoIterator = struct {
+    //     proto_idx: usize,
+    // };
+    // pub fn protoIterator() ProtoIterator {}
+
+    // pub const FieldIterator = struct {
+    //     field_idx: usize,
+    // };
+    // pub fn fieldIterator() FieldIterator {}
+
+    // pub const MethodIterator = struct {
+    //     method_idx: usize,
+    // };
+    // pub fn methodIterator() MethodIterator {}
+
+    // pub const ClassIterator = struct {
+    //     class_idx: usize,
+    // };
+    // pub fn classIterator() ClassIterator {}
+
+    // pub fn writeFieldString(dex: Dex, writer: anytype, field_id: u32) !void {
+    //     const id = dex.field_ids.items[field_id];
+    //     const class_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.class_idx].descriptor_idx]);
+    //     const type_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.type_idx].descriptor_idx]);
+    //     const name_str = try dex.getString(dex.string_ids.items[id.name_idx]);
+    //     try std.fmt.format(writer, "{s}.{s}: {s}\n", .{ class_str.data, name_str.data, type_str.data });
+    // }
+
+    // pub fn writeMethodString(dex: Dex, alloc: std.mem.Allocator, writer: anytype, method_id: u32) !void {
+    //     const id = dex.method_ids.items[method_id];
+    //     const class_str = try dex.getString(dex.string_ids.items[dex.type_ids.items[id.class_idx].descriptor_idx]);
+    //     const name_str = try dex.getString(dex.string_ids.items[id.name_idx]);
+    //     const prototype = try dex.getPrototype(dex.proto_ids.items[id.proto_idx], alloc);
+    //     try std.fmt.format(writer, "{s}.{s}(", .{ class_str.data, name_str.data });
+    //     if (prototype.parameters) |parameters| {
+    //         for (try dex.getTypeStringList(parameters, alloc)) |type_string| {
+    //             try std.fmt.format(writer, "{s}", .{type_string.data});
+    //         }
+    //     }
+    //     try std.fmt.format(writer, "){s}\n", .{prototype.return_type.data});
+    // }
 };
 
 const Prototype = struct {
@@ -1250,14 +1465,12 @@ const AnnotationElement = struct {
 };
 
 const HeaderItem = struct {
-    /// Magic value
-    magic: [4]u8,
     /// Dex file format version
     version: Version,
     /// adler32 checksum of the rest of the file (everything but magic and this field); used to detect file corruption
     checksum: u32,
     /// SHA-1 signature (hash) of the rest of the file (everything but magic, checksum, and this field); used to uniquely identify files
-    signature: [20]u8,
+    signature: []const u8,
     /// size of the entire file (including the header), in bytes
     file_size: u32,
     /// size of the header (this entire section), in bytes. This allows for at least a limited amount of backwards/forwards compatibility without invalidating the format
@@ -1314,12 +1527,120 @@ const HeaderItem = struct {
     /// offset from the start of the file to the start of the data section.
     data_off: u32,
 
+    pub const HeaderError = error{
+        InvalidMagicBytes,
+        UnknownFormatVersion,
+        InvalidEndianTag,
+        InvalidChecksum,
+        InvalidSignature,
+    };
+
+    pub fn parse(slice: []const u8) !HeaderItem {
+        if (!std.mem.eql(u8, DEX_FILE_MAGIC, slice[0..4])) {
+            return error.InvalidMagicBytes;
+        }
+        const version_buf = slice[4..8];
+        var version_opt: ?Version = null;
+        if (std.mem.eql(u8, version_buf, "035\x00")) {
+            version_opt = .@"035";
+        } else if (std.mem.eql(u8, version_buf, "036\x00")) {
+            version_opt = .@"036";
+        } else if (std.mem.eql(u8, version_buf, "037\x00")) {
+            version_opt = .@"037";
+        } else if (std.mem.eql(u8, version_buf, "038\x00")) {
+            version_opt = .@"038";
+        } else if (std.mem.eql(u8, version_buf, "039\x00")) {
+            version_opt = .@"039";
+        } else {
+            return error.UnknownFormatVersion;
+        }
+        const version = version_opt orelse return error.UnknownFormatVersion;
+        const read_checksum = std.mem.readInt(u32, slice[8..12], .little);
+
+        // Compute checksum
+        const to_checksum = slice[12..];
+        const calculated_checksum = std.hash.Adler32.hash(to_checksum);
+        if (read_checksum != calculated_checksum) {
+            std.log.err("checksum: file {} - calculated {}", .{
+                read_checksum,
+                calculated_checksum,
+            });
+            return error.InvalidChecksum;
+        }
+
+        const signature = slice[12..32];
+
+        // Compute SHA1 signature
+        const to_hash = to_checksum[20..];
+        var hash: [20]u8 = undefined;
+        std.crypto.hash.Sha1.hash(to_hash, &hash, .{});
+        if (!std.mem.eql(u8, &hash, signature)) {
+            std.log.err("File hash\t{}\n\texpected\t{}", .{
+                std.fmt.fmtSliceHexUpper(&hash),
+                std.fmt.fmtSliceHexUpper(signature),
+            });
+            return error.InvalidSignature;
+        }
+
+        const file_size = std.mem.readInt(u32, slice[32..36], .little);
+        const header_size = std.mem.readInt(u32, slice[36..40], .little);
+        const endianness: Endianness = @enumFromInt(std.mem.readInt(u32, slice[40..44], .little));
+        const endian_tag: std.builtin.Endian = switch (endianness) {
+            .Endian => .little,
+            .ReverseEndian => .big,
+            _ => return error.InvalidEndianTag,
+        };
+        const link_size = std.mem.readInt(u32, slice[44..48], endian_tag);
+        const link_off = std.mem.readInt(u32, slice[48..52], endian_tag);
+        const map_off = std.mem.readInt(u32, slice[52..56], endian_tag);
+        const string_ids_size = std.mem.readInt(u32, slice[56..60], endian_tag);
+        const string_ids_off = std.mem.readInt(u32, slice[60..64], endian_tag);
+        const type_ids_size = std.mem.readInt(u32, slice[64..68], endian_tag);
+        const type_ids_off = std.mem.readInt(u32, slice[68..72], endian_tag);
+        const proto_ids_size = std.mem.readInt(u32, slice[72..76], endian_tag);
+        const proto_ids_off = std.mem.readInt(u32, slice[76..80], endian_tag);
+        const field_ids_size = std.mem.readInt(u32, slice[80..84], endian_tag);
+        const field_ids_off = std.mem.readInt(u32, slice[84..88], endian_tag);
+        const method_ids_size = std.mem.readInt(u32, slice[88..92], endian_tag);
+        const method_ids_off = std.mem.readInt(u32, slice[92..96], endian_tag);
+        const class_defs_size = std.mem.readInt(u32, slice[96..100], endian_tag);
+        const class_defs_off = std.mem.readInt(u32, slice[100..104], endian_tag);
+        const data_size = std.mem.readInt(u32, slice[104..108], endian_tag);
+        const data_off = std.mem.readInt(u32, slice[108..112], endian_tag);
+        return .{
+            .version = version,
+            .checksum = read_checksum,
+            .signature = signature,
+            .file_size = file_size,
+            .header_size = header_size,
+            .endian_tag = endian_tag,
+            .link_size = link_size,
+            .link_off = link_off,
+            .map_off = map_off,
+            .string_ids_size = string_ids_size,
+            .string_ids_off = string_ids_off,
+            .type_ids_size = type_ids_size,
+            .type_ids_off = type_ids_off,
+            .proto_ids_size = proto_ids_size,
+            .proto_ids_off = proto_ids_off,
+            .field_ids_size = field_ids_size,
+            .field_ids_off = field_ids_off,
+            .method_ids_size = method_ids_size,
+            .method_ids_off = method_ids_off,
+            .class_defs_size = class_defs_size,
+            .class_defs_off = class_defs_off,
+            .data_size = data_size,
+            .data_off = data_off,
+        };
+    }
+
     pub fn read(seek: anytype, reader: anytype) !HeaderItem {
         _ = seek;
         var header: HeaderItem = undefined;
+        var magic_buf: [4]u8 = undefined;
 
-        if (try reader.read(&header.magic) != header.magic.len) return error.UnexpectedEOF;
-        if (!std.mem.eql(u8, header.magic[0..], DEX_FILE_MAGIC[0..])) {
+        if (try reader.read(&magic_buf) != header.magic.len) return error.UnexpectedEOF;
+        if (!std.mem.eql(u8, &magic_buf, DEX_FILE_MAGIC[0..])) {
             std.log.info("Header magic bytes were 0x{}, expected 0x{}", .{ std.fmt.fmtSliceHexLower(header.magic[0..]), std.fmt.fmtSliceHexLower(DEX_FILE_MAGIC[0..]) });
             return error.InvalidMagicBytes;
         }
@@ -1392,16 +1713,27 @@ const MapList = struct {
 
 const MapItem = struct {
     type: TypeCode,
-    _unused: u16,
     size: u32,
     offset: u32,
 
+    pub fn fromSlice(slice: []const u8, endian: std.builtin.Endian) MapItem {
+        std.debug.assert(slice.len == 12);
+        return .{
+            .type = @enumFromInt(std.mem.readInt(u16, slice[0..2], endian)),
+            .size = std.mem.readInt(u32, slice[4..8], endian),
+            .offset = std.mem.readInt(u32, slice[8..12], endian),
+        };
+    }
+
     pub fn read(reader: anytype) !MapItem {
+        const t = try reader.readEnum(TypeCode, .little);
+        _ = try reader.readInt(u16, .little); // Read the unused bytes
+        const size = try reader.readInt(u32, .little);
+        const offset = try reader.readInt(u32, .little);
         return MapItem{
-            .type = try reader.readEnum(TypeCode, .little),
-            ._unused = try reader.readInt(u16, .little),
-            .size = try reader.readInt(u32, .little),
-            .offset = try reader.readInt(u32, .little),
+            .type = t,
+            .size = size,
+            .offset = offset,
         };
     }
 };

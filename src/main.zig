@@ -424,112 +424,122 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
+    const file_buffer = try file.readToEndAlloc(alloc, std.math.maxInt(u16));
+    defer alloc.free(file_buffer);
 
-    var classes = try dex.Dex.readAlloc(file.seekableStream(), file.reader(), alloc);
+    // TODO: remove references to Dex internal fields and instead design an API that will allow
+    // querying the file directly _without_ creating a bunch of in-memory structures
+    var dexfile = try dex.Dex.initFromSlice(file_buffer);
 
-    for (classes.map_list.list) |list_item| {
-        try std.fmt.format(stdout.writer(), "{}\n", .{list_item});
+    // var classes = try dex.Dex.readAlloc(file.seekableStream(), file.reader(), alloc);
+
+    var map_iter = dexfile.mapIterator();
+    try std.fmt.format(stdout.writer(), "Map Item Count: {}\n", .{map_iter.list_size});
+    while (map_iter.next()) |list_item| {
+        try std.fmt.format(stdout.writer(), "Map Item: {}\n", .{list_item});
     }
 
-    var string_iter = classes.strings.keyIterator();
-    while (string_iter.next()) |string| {
-        try std.fmt.format(stdout.writer(), "String: {s}\n", .{string.*});
-    }
-
-    // for (classes.string_ids.items, 0..) |id, i| {
-    //     const str = try classes.getString(id);
-    //     try std.fmt.format(stdout.writer(), "String {}: {s}\n", .{ i, str.data });
+    // var string_iter = dexfile.stringIterator();
+    // while (string_iter.next()) |string| {
+    //     try std.fmt.format(stdout.writer(), "String: {s}\n", .{string.*});
     // }
 
-    var type_iter = classes.types.keyIterator();
-    while (type_iter.next()) |t| {
-        try std.fmt.format(stdout.writer(), "Type Descriptor: {s}\n", .{t.*});
-    }
-
-    // for (classes.type_ids.items, 0..) |id, i| {
-    //     const str = try classes.getTypeString(id);
-    //     try std.fmt.format(stdout.writer(), "Type Descriptor {}: {s}\n", .{ i, str.data });
+    // var type_iter = dexfile.typeIterator();
+    // while (type_iter.next()) |t| {
+    //     try std.fmt.format(stdout.writer(), "Type Descriptor: {s}\n", .{t.*});
     // }
 
-    for (classes.proto_ids.items, 0..) |id, i| {
-        const prototype = try classes.getPrototype(id, alloc);
-        try std.fmt.format(stdout.writer(), "Prototype {}; shorty {s}; (", .{ i, prototype.shorty.data });
-        if (prototype.parameters) |parameters| {
-            for (try classes.getTypeStringList(parameters, alloc)) |type_string| {
-                try std.fmt.format(stdout.writer(), "{s}", .{type_string.data});
-            }
-        }
-        try std.fmt.format(stdout.writer(), "){s}\n", .{prototype.return_type.data});
-    }
+    // {
+    //     var i: usize = 0;
+    //     var proto_iter = dexfile.protoIterator();
+    //     while (proto_iter.next()) |id| : (i += 1) {
+    //         const prototype = dexfile.getPrototype(id, alloc);
+    //         try std.fmt.format(stdout.writer(), "Prototype {}; shorty {s}; (", .{ i, prototype.shorty.data });
+    //         if (prototype.parameters) |parameters| {
+    //             for (dexfile.getTypeStringList(parameters, alloc)) |type_string| {
+    //                 try std.fmt.format(stdout.writer(), "{s}", .{type_string.data});
+    //             }
+    //         }
+    //         try std.fmt.format(stdout.writer(), "){s}\n", .{prototype.return_type.data});
+    //     }
+    // }
 
-    for (classes.field_ids.items, 0..) |id, i| {
-        const class_str = try classes.getString(classes.string_ids.items[classes.type_ids.items[id.class_idx].descriptor_idx]);
-        const type_str = try classes.getString(classes.string_ids.items[classes.type_ids.items[id.type_idx].descriptor_idx]);
-        const name_str = try classes.getString(classes.string_ids.items[id.name_idx]);
-        try std.fmt.format(stdout.writer(), "Field {}, {s}.{s}: {s}\n", .{ i, class_str.data, name_str.data, type_str.data });
-    }
+    // {
+    //     var i: usize = 0;
+    //     var field_iter = dexfile.fieldIterator();
+    //     while (field_iter.next()) |id| : (i += 1) {
+    //         const class_str = dexfile.getClassString(id.class_idx);
+    //         const type_str = dexfile.getTypeString(id.type_idx);
+    //         const name_str = dexfile.getString(id.name_idx);
+    //         try std.fmt.format(stdout.writer(), "Field {}, {s}.{s}: {s}\n", .{ i, class_str, name_str, type_str });
+    //     }
+    // }
 
-    for (classes.method_ids.items, 0..) |id, i| {
-        const class_str = try classes.getString(classes.string_ids.items[classes.type_ids.items[id.class_idx].descriptor_idx]);
-        const name_str = try classes.getString(classes.string_ids.items[id.name_idx]);
-        const prototype = try classes.getPrototype(classes.proto_ids.items[id.proto_idx], alloc);
-        try std.fmt.format(stdout.writer(), "Method {}, {s}.{s}(", .{ i, class_str.data, name_str.data });
-        if (prototype.parameters) |parameters| {
-            for (try classes.getTypeStringList(parameters, alloc)) |type_string| {
-                try std.fmt.format(stdout.writer(), "{s}", .{type_string.data});
-            }
-        }
-        try std.fmt.format(stdout.writer(), "){s}\n", .{prototype.return_type.data});
-    }
+    // {
+    //     var i: usize = 0;
+    //     var method_iter = dexfile.methodIterator();
+    //     while (method_iter.next()) |id| : (i += 1) {
+    //         const class_str = dexfile.getClassString(id.class_idx);
+    //         const name_str = dexfile.getString(id.name_idx);
+    //         const prototype = dexfile.getPrototypeString(id.proto_idx);
+    //         try std.fmt.format(stdout.writer(), "Method {}, {s}.{s}", .{ i, class_str, name_str, prototype_string });
+    //     }
+    // }
 
-    for (classes.class_defs.items, classes.class_data.items) |def, data| {
-        const class = try classes.getTypeString(classes.type_ids.items[def.class_idx]);
-        const superclass = if (def.superclass_idx == dex.NO_INDEX) "null" else (try classes.getTypeString(classes.type_ids.items[def.superclass_idx])).data;
-        const file_name = if (def.source_file_idx == dex.NO_INDEX) "null" else (try classes.getString(classes.string_ids.items[def.source_file_idx])).data;
-        try std.fmt.format(stdout.writer(), "{} Class {s} extends {s} defined in {s}\n", .{ def.access_flags, class.data, superclass, file_name });
+    // {
+    //     var i: usize = 0;
+    //     var class_iter = dexfile.classIterator();
+    //     while (class_iter.next()) |class| : (i += 1) {
+    //     }
+    // }
+    // for (classes.class_defs.items, classes.class_data.items) |def, data| {
+    //     const class = try classes.getTypeString(classes.type_ids.items[def.class_idx]);
+    //     const superclass = if (def.superclass_idx == dex.NO_INDEX) "null" else (try classes.getTypeString(classes.type_ids.items[def.superclass_idx])).data;
+    //     const file_name = if (def.source_file_idx == dex.NO_INDEX) "null" else (try classes.getString(classes.string_ids.items[def.source_file_idx])).data;
+    //     try std.fmt.format(stdout.writer(), "{} Class {s} extends {s} defined in {s}\n", .{ def.access_flags, class.data, superclass, file_name });
 
-        var static_field_id: u32 = 0;
-        for (data.static_fields.items, 0..) |field, i| {
-            static_field_id = if (i == 0) field.field_idx_diff else static_field_id +% field.field_idx_diff;
-            try stdout.writer().print("\t{} ", .{field.access_flags});
-            try classes.writeFieldString(stdout.writer(), static_field_id);
-        }
+    //     var static_field_id: u32 = 0;
+    //     for (data.static_fields.items, 0..) |field, i| {
+    //         static_field_id = if (i == 0) field.field_idx_diff else static_field_id +% field.field_idx_diff;
+    //         try stdout.writer().print("\t{} ", .{field.access_flags});
+    //         try classes.writeFieldString(stdout.writer(), static_field_id);
+    //     }
 
-        var instance_field_id: u32 = 0;
-        for (data.instance_fields.items, 0..) |field, i| {
-            instance_field_id = if (i == 0) field.field_idx_diff else instance_field_id +% field.field_idx_diff;
-            try stdout.writer().print("\t{} ", .{field.access_flags});
-            try classes.writeFieldString(stdout.writer(), instance_field_id);
-        }
+    //     var instance_field_id: u32 = 0;
+    //     for (data.instance_fields.items, 0..) |field, i| {
+    //         instance_field_id = if (i == 0) field.field_idx_diff else instance_field_id +% field.field_idx_diff;
+    //         try stdout.writer().print("\t{} ", .{field.access_flags});
+    //         try classes.writeFieldString(stdout.writer(), instance_field_id);
+    //     }
 
-        var direct_method_id: u32 = 0;
-        for (data.direct_methods.items, 0..) |method, i| {
-            direct_method_id = if (i == 0) method.method_idx_diff else direct_method_id +% method.method_idx_diff;
-            try stdout.writer().print("\t{} ", .{method.access_flags});
-            try classes.writeMethodString(alloc, stdout.writer(), direct_method_id);
+    //     var direct_method_id: u32 = 0;
+    //     for (data.direct_methods.items, 0..) |method, i| {
+    //         direct_method_id = if (i == 0) method.method_idx_diff else direct_method_id +% method.method_idx_diff;
+    //         try stdout.writer().print("\t{} ", .{method.access_flags});
+    //         try classes.writeMethodString(alloc, stdout.writer(), direct_method_id);
 
-            if (method.code_off == 0) continue;
+    //         if (method.code_off == 0) continue;
 
-            try file.seekTo(method.code_off);
-            const code_item = try dex.CodeItem.read(file.reader(), alloc);
-            defer code_item.deinit(alloc);
-            try stdout.writer().print("{}\n", .{code_item});
-        }
+    //         try file.seekTo(method.code_off);
+    //         const code_item = try dex.CodeItem.read(file.reader(), alloc);
+    //         defer code_item.deinit(alloc);
+    //         try stdout.writer().print("{}\n", .{code_item});
+    //     }
 
-        var virtual_method_id: u32 = 0;
-        for (data.virtual_methods.items, 0..) |method, i| {
-            virtual_method_id = if (i == 0) method.method_idx_diff else virtual_method_id +% method.method_idx_diff;
-            try stdout.writer().print("\t{} ", .{method.access_flags});
-            try classes.writeMethodString(alloc, stdout.writer(), virtual_method_id);
+    //     var virtual_method_id: u32 = 0;
+    //     for (data.virtual_methods.items, 0..) |method, i| {
+    //         virtual_method_id = if (i == 0) method.method_idx_diff else virtual_method_id +% method.method_idx_diff;
+    //         try stdout.writer().print("\t{} ", .{method.access_flags});
+    //         try classes.writeMethodString(alloc, stdout.writer(), virtual_method_id);
 
-            if (method.code_off == 0) continue;
+    //         if (method.code_off == 0) continue;
 
-            try file.seekTo(method.code_off);
-            const code_item = try dex.CodeItem.read(file.reader(), alloc);
-            defer code_item.deinit(alloc);
-            try stdout.writer().print("{}\n", .{code_item});
-        }
-    }
+    //         try file.seekTo(method.code_off);
+    //         const code_item = try dex.CodeItem.read(file.reader(), alloc);
+    //         defer code_item.deinit(alloc);
+    //         try stdout.writer().print("{}\n", .{code_item});
+    //     }
+    // }
 }
 
 fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {
