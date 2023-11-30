@@ -1014,7 +1014,7 @@ pub const Dex = struct {
     // }
 
     pub fn getString(dex: Dex, id: u32) ![]const u8 {
-        if (id > dex.file_buffer.len) return error.StringIdOutOfBounds;
+        if (id >= dex.header.string_ids_size) return error.StringIdOutOfBounds;
         const id_offset = dex.header.string_ids_off + (id * 4);
         const string_offset = std.mem.readInt(u32, dex.file_buffer[id_offset..][0..4], dex.header.endian_tag);
         const to_read = dex.file_buffer[string_offset..];
@@ -1031,16 +1031,17 @@ pub const Dex = struct {
                 stored_codepoints,
                 codepoints,
             });
+            return error.MismatchedCodepointCount;
         }
 
         return data;
     }
 
-    pub fn getType(dex: Dex, id: usize) !usize {
-        const offset = dex.header.type_id_offset + (id * 0x04);
+    pub fn getType(dex: Dex, id: usize) !u32 {
+        const offset = dex.header.type_ids_off + (id * 0x04);
         if (offset > dex.file_buffer.len) return error.OutOfBounds;
         const type_slice = dex.file_buffer[offset..][0..4];
-        const string_index = try std.mem.readInt(u32, type_slice, dex.endian);
+        const string_index = std.mem.readInt(u32, type_slice, dex.header.endian_tag);
         return string_index;
     }
 
@@ -1054,9 +1055,9 @@ pub const Dex = struct {
 
         const proto_slice = dex.file_buffer[offset..][0..0xc];
 
-        const shorty_idx = std.mem.readInt(u32, proto_slice[0..4], dex.endian);
-        const return_type_idx = std.mem.readInt(u32, proto_slice[4..8], dex.endian);
-        const parameters_off = std.mem.readInt(u32, proto_slice[8..12], dex.endian);
+        const shorty_idx = std.mem.readInt(u32, proto_slice[0..4], dex.header.endian_tag);
+        const return_type_idx = std.mem.readInt(u32, proto_slice[4..8], dex.header.endian_tag);
+        const parameters_off = std.mem.readInt(u32, proto_slice[8..12], dex.header.endian_tag);
         return Prototype{
             .shorty_idx = shorty_idx,
             .return_type_idx = return_type_idx,
@@ -1119,10 +1120,23 @@ pub const Dex = struct {
         };
     }
 
-    // pub const TypeIterator = struct {
-    //     type_idx: usize,
-    // };
-    // pub fn typeIterator() TypeIterator {}
+    pub const TypeIterator = struct {
+        dex: *const Dex,
+        index: u32,
+        /// Returns an index into the string pool. The type is encoded in the string.
+        pub fn next(iter: *TypeIterator) ?u32 {
+            if (iter.index >= iter.dex.header.type_ids_size) return null;
+            const t = iter.dex.getType(iter.index) catch return null;
+            iter.index += 1;
+            return t;
+        }
+    };
+    pub fn typeIterator(dex: *const Dex) TypeIterator {
+        return .{
+            .dex = dex,
+            .index = 0,
+        };
+    }
 
     // pub const ProtoIterator = struct {
     //     proto_idx: usize,

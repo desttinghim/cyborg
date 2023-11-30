@@ -444,10 +444,11 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         try std.fmt.format(stdout.writer(), "String: {s}\n", .{string});
     }
 
-    // var type_iter = dexfile.typeIterator();
-    // while (type_iter.next()) |t| {
-    //     try std.fmt.format(stdout.writer(), "Type Descriptor: {s}\n", .{t.*});
-    // }
+    var type_iter = dexfile.typeIterator();
+    while (type_iter.next()) |t_id| {
+        const t = try dexfile.getString(t_id);
+        try std.fmt.format(stdout.writer(), "Type Descriptor: {s}\n", .{t});
+    }
 
     // {
     //     var i: usize = 0;
