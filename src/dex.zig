@@ -1097,7 +1097,17 @@ pub const Dex = struct {
         };
     }
 
-    // pub fn getField(dex: Dex, field_id: usize) FieldIdItem {}
+    pub fn getField(dex: Dex, field_id: u32) !FieldIdItem {
+        if (field_id > dex.header.field_ids_size) return error.OutOfBounds;
+        const offset = dex.header.field_ids_off + field_id * 8;
+        if (offset > dex.file_buffer.len) return error.OutOfBounds;
+        const slice = dex.file_buffer[offset..][0..8];
+        return .{
+            .class_idx = std.mem.readInt(u16, slice[0..2], dex.header.endian_tag),
+            .type_idx = std.mem.readInt(u16, slice[2..][0..2], dex.header.endian_tag),
+            .name_idx = std.mem.readInt(u32, slice[4..][0..4], dex.header.endian_tag),
+        };
+    }
 
     // pub fn getMethod(dex: Dex, method_id: usize) MethodIdItem {}
 
@@ -1175,10 +1185,22 @@ pub const Dex = struct {
         };
     }
 
-    // pub const FieldIterator = struct {
-    //     field_idx: usize,
-    // };
-    // pub fn fieldIterator() FieldIterator {}
+    pub const FieldIterator = struct {
+        dex: *const Dex,
+        index: u32,
+        pub fn next(iter: *FieldIterator) ?FieldIdItem {
+            if (iter.index >= iter.dex.header.field_ids_size) return null;
+            const field = iter.dex.getField(iter.index) catch return null;
+            iter.index += 1;
+            return field;
+        }
+    };
+    pub fn fieldIterator(dex: *const Dex) FieldIterator {
+        return .{
+            .dex = dex,
+            .index = 0,
+        };
+    }
 
     // pub const MethodIterator = struct {
     //     method_idx: usize,

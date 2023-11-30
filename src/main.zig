@@ -469,16 +469,16 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         }
     }
 
-    // {
-    //     var i: usize = 0;
-    //     var field_iter = dexfile.fieldIterator();
-    //     while (field_iter.next()) |id| : (i += 1) {
-    //         const class_str = dexfile.getClassString(id.class_idx);
-    //         const type_str = dexfile.getTypeString(id.type_idx);
-    //         const name_str = dexfile.getString(id.name_idx);
-    //         try std.fmt.format(stdout.writer(), "Field {}, {s}.{s}: {s}\n", .{ i, class_str, name_str, type_str });
-    //     }
-    // }
+    {
+        var i: usize = 0;
+        var field_iter = dexfile.fieldIterator();
+        while (field_iter.next()) |id| : (i += 1) {
+            const class_str = try dexfile.getTypeString(id.class_idx);
+            const type_str = try dexfile.getTypeString(id.type_idx);
+            const name_str = try dexfile.getString(id.name_idx);
+            try std.fmt.format(stdout.writer(), "Field {}, {s}.{s}: {s}\n", .{ i, class_str, name_str, type_str });
+        }
+    }
 
     // {
     //     var i: usize = 0;
