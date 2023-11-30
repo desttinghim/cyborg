@@ -1109,6 +1109,35 @@ pub const Dex = struct {
         };
     }
 
+    pub fn getMethod(dex: Dex, method_id: u32) !MethodIdItem {
+        if (method_id > dex.header.method_ids_size) return error.OutOfBounds;
+        const offset = dex.header.method_ids_off + method_id * 8;
+        if (offset > dex.file_buffer.len) return error.OutOfBounds;
+        const slice = dex.file_buffer[offset..][0..8];
+        return .{
+            .class_idx = std.mem.readInt(u16, slice[0..2], dex.header.endian_tag),
+            .proto_idx = std.mem.readInt(u16, slice[2..][0..2], dex.header.endian_tag),
+            .name_idx = std.mem.readInt(u32, slice[4..][0..4], dex.header.endian_tag),
+        };
+    }
+
+    pub fn getClassDef(dex: Dex, class_def: u32) !ClassDefItem {
+        if (class_def > dex.header.class_defs_size) return error.OutOfBounds;
+        const offset = dex.header.class_defs_off + class_def * 8;
+        if (offset > dex.file_buffer.len) return error.OutOfBounds;
+        const slice = dex.file_buffer[offset..][0..8];
+        return .{
+            .class_idx = std.mem.readInt(u32, slice[0..4], dex.header.endian_tag),
+            .access_flags = @bitCast(std.mem.readInt(u32, slice[4..][0..4], dex.header.endian_tag)),
+            .superclass_idx = std.mem.readInt(u32, slice[8..][0..4], dex.header.endian_tag),
+            .interfaces_off = std.mem.readInt(u32, slice[12..][0..4], dex.header.endian_tag),
+            .source_file_idx = std.mem.readInt(u32, slice[16..][0..4], dex.header.endian_tag),
+            .annotations_off = std.mem.readInt(u32, slice[20..][0..4], dex.header.endian_tag),
+            .class_data_off = std.mem.readInt(u32, slice[24..][0..4], dex.header.endian_tag),
+            .static_values_off = std.mem.readInt(u32, slice[28..][0..4], dex.header.endian_tag),
+        };
+    }
+
     // pub fn getMethod(dex: Dex, method_id: usize) MethodIdItem {}
 
     pub const MapIterator = struct {
@@ -1202,15 +1231,39 @@ pub const Dex = struct {
         };
     }
 
-    // pub const MethodIterator = struct {
-    //     method_idx: usize,
-    // };
-    // pub fn methodIterator() MethodIterator {}
+    pub const MethodIterator = struct {
+        dex: *const Dex,
+        index: u32,
+        pub fn next(iter: *MethodIterator) ?MethodIdItem {
+            if (iter.index >= iter.dex.header.method_ids_size) return null;
+            const method = iter.dex.getMethod(iter.index) catch return null;
+            iter.index += 1;
+            return method;
+        }
+    };
+    pub fn methodIterator(dex: *const Dex) MethodIterator {
+        return .{
+            .dex = dex,
+            .index = 0,
+        };
+    }
 
-    // pub const ClassIterator = struct {
-    //     class_idx: usize,
-    // };
-    // pub fn classIterator() ClassIterator {}
+    pub const ClassDefIterator = struct {
+        dex: *const Dex,
+        index: u32,
+        pub fn next(iter: *ClassDefIterator) ?ClassDefItem {
+            if (iter.index >= iter.dex.header.class_defs_size) return null;
+            const class_def = iter.dex.getClassDef(iter.index) catch return null;
+            iter.index += 1;
+            return class_def;
+        }
+    };
+    pub fn classDefIterator(dex: *const Dex) ClassDefIterator {
+        return .{
+            .dex = dex,
+            .index = 0,
+        };
+    }
 
     // pub fn writeFieldString(dex: Dex, writer: anytype, field_id: u32) !void {
     //     const id = dex.field_ids.items[field_id];

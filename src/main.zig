@@ -480,16 +480,15 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         }
     }
 
-    // {
-    //     var i: usize = 0;
-    //     var method_iter = dexfile.methodIterator();
-    //     while (method_iter.next()) |id| : (i += 1) {
-    //         const class_str = dexfile.getClassString(id.class_idx);
-    //         const name_str = dexfile.getString(id.name_idx);
-    //         const prototype = dexfile.getPrototypeString(id.proto_idx);
-    //         try std.fmt.format(stdout.writer(), "Method {}, {s}.{s}", .{ i, class_str, name_str, prototype_string });
-    //     }
-    // }
+    {
+        var i: usize = 0;
+        var method_iter = dexfile.methodIterator();
+        while (method_iter.next()) |id| : (i += 1) {
+            const class_str = try dexfile.getTypeString(id.class_idx);
+            const name_str = try dexfile.getString(id.name_idx);
+            try std.fmt.format(stdout.writer(), "Method {}: {s} {s}\n", .{ i, class_str, name_str });
+        }
+    }
 
     // {
     //     var i: usize = 0;
