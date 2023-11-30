@@ -450,20 +450,24 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         try std.fmt.format(stdout.writer(), "Type Descriptor: {s}\n", .{t});
     }
 
-    // {
-    //     var i: usize = 0;
-    //     var proto_iter = dexfile.protoIterator();
-    //     while (proto_iter.next()) |id| : (i += 1) {
-    //         const prototype = dexfile.getPrototype(id, alloc);
-    //         try std.fmt.format(stdout.writer(), "Prototype {}; shorty {s}; (", .{ i, prototype.shorty.data });
-    //         if (prototype.parameters) |parameters| {
-    //             for (dexfile.getTypeStringList(parameters, alloc)) |type_string| {
-    //                 try std.fmt.format(stdout.writer(), "{s}", .{type_string.data});
-    //             }
-    //         }
-    //         try std.fmt.format(stdout.writer(), "){s}\n", .{prototype.return_type.data});
-    //     }
-    // }
+    {
+        var i: usize = 0;
+        var proto_iter = dexfile.protoIterator();
+        while (proto_iter.next()) |proto| : (i += 1) {
+            const shorty = try dexfile.getString(proto.shorty_idx);
+            const t = try dexfile.getTypeString(proto.return_type_idx);
+            try std.fmt.format(stdout.writer(), "prototype {}\n", .{proto});
+            try std.fmt.format(stdout.writer(), "Prototype {}; shorty {s}; (", .{ i, shorty });
+            var param_iter_opt = try dexfile.typeListIterator(proto.parameters_off);
+            if (param_iter_opt) |*param_iter| {
+                while (param_iter.next()) |param| {
+                    const param_str = try dexfile.getTypeString(param);
+                    try std.fmt.format(stdout.writer(), "{s}", .{param_str});
+                }
+            }
+            try std.fmt.format(stdout.writer(), "){s}\n", .{t});
+        }
+    }
 
     // {
     //     var i: usize = 0;

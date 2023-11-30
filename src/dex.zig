@@ -1037,7 +1037,7 @@ pub const Dex = struct {
         return data;
     }
 
-    pub fn getType(dex: Dex, id: usize) !u32 {
+    pub fn getType(dex: Dex, id: u32) !u32 {
         const offset = dex.header.type_ids_off + (id * 0x04);
         if (offset > dex.file_buffer.len) return error.OutOfBounds;
         const type_slice = dex.file_buffer[offset..][0..4];
@@ -1045,37 +1045,57 @@ pub const Dex = struct {
         return string_index;
     }
 
-    pub fn getTypeString(dex: Dex, id: usize) ![]const u8 {
-        return dex.getString(dex.getType(id));
+    pub fn getTypeString(dex: Dex, id: u32) ![]const u8 {
+        return try dex.getString(try dex.getType(id));
     }
 
-    pub fn getProto(dex: Dex, id: usize) !Prototype {
-        const offset = dex.header.proto_id_offset + (id * 0x0c);
-        if (offset > dex.file_buffer.len) return error.OutOfBounds;
+    pub fn getProto(dex: Dex, id: u32) !ProtoIdItem {
+        const offset = dex.header.proto_ids_off + (id * (3 * 4));
+        if (offset >= dex.file_buffer.len) return error.OutOfBounds;
 
         const proto_slice = dex.file_buffer[offset..][0..0xc];
 
         const shorty_idx = std.mem.readInt(u32, proto_slice[0..4], dex.header.endian_tag);
         const return_type_idx = std.mem.readInt(u32, proto_slice[4..8], dex.header.endian_tag);
         const parameters_off = std.mem.readInt(u32, proto_slice[8..12], dex.header.endian_tag);
-        return Prototype{
+        return ProtoIdItem{
             .shorty_idx = shorty_idx,
             .return_type_idx = return_type_idx,
             .parameters_off = parameters_off,
         };
     }
 
-    // pub const TypeListIterator = struct {
-    //     /// Offset from the beginning of the file to the
-    //     /// TypeList data
-    //     offset: usize,
-    //     pub fn next(iter: *TypeListIterator) ?Type {
-    //         // TODO
-    //     }
-    // };
-    // pub fn getTypeListIterator(dex: Dex, type_list_offset: usize) !TypeListIterator {
-    //     // TODO
-    // }
+    pub const TypeListIterator = struct {
+        dex: *const Dex,
+        /// Offset from the beginning of the file to the
+        /// TypeList data. Does not include the size uleb128 size that
+        /// precedes encoded arrays.
+        offset: u32,
+        size: u32,
+        index: u32,
+        /// Returns an index into the type list
+        pub fn next(iter: *TypeListIterator) ?u32 {
+            if (iter.index >= iter.size) return null;
+            const offset = iter.offset + 4 + iter.index * 2;
+            const slice = iter.dex.file_buffer[offset..][0..2];
+            const t = std.mem.readInt(u16, slice, iter.dex.header.endian_tag);
+            iter.index += 1;
+            return t;
+        }
+    };
+    pub fn typeListIterator(dex: *const Dex, type_list_offset: u32) !?TypeListIterator {
+        if (type_list_offset == 0) return null;
+        if (type_list_offset > dex.file_buffer.len) return error.OutOfBounds;
+        const to_read = dex.file_buffer[type_list_offset..][0..4];
+        const size = std.mem.readInt(u32, to_read, dex.header.endian_tag);
+
+        return .{
+            .dex = dex,
+            .offset = type_list_offset,
+            .index = 0,
+            .size = size,
+        };
+    }
 
     // pub fn getField(dex: Dex, field_id: usize) FieldIdItem {}
 
@@ -1138,10 +1158,22 @@ pub const Dex = struct {
         };
     }
 
-    // pub const ProtoIterator = struct {
-    //     proto_idx: usize,
-    // };
-    // pub fn protoIterator() ProtoIterator {}
+    pub const ProtoIterator = struct {
+        dex: *const Dex,
+        index: u32,
+        pub fn next(iter: *ProtoIterator) ?ProtoIdItem {
+            if (iter.index >= iter.dex.header.proto_ids_size) return null;
+            const proto = iter.dex.getProto(iter.index) catch return null;
+            iter.index += 1;
+            return proto;
+        }
+    };
+    pub fn protoIterator(dex: *const Dex) ProtoIterator {
+        return .{
+            .dex = dex,
+            .index = 0,
+        };
+    }
 
     // pub const FieldIterator = struct {
     //     field_idx: usize,
