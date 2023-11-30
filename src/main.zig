@@ -501,56 +501,61 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
             } else {
                 try std.fmt.format(stdout.writer(), "Class {s}\n", .{class_str});
             }
+
+            const class_data = try dexfile.getClassData(class);
+            try std.fmt.format(stdout.writer(), "{}\n", .{class_data});
+
+            try std.fmt.format(stdout.writer(), "Static Fields:\n", .{});
+            var static_field_iter = dexfile.classDataIterator(class_data, .static_field);
+            while (static_field_iter.next()) |data| {
+                const field_id = try dexfile.getField(data.static_field.field_idx);
+                const t = try dexfile.getString(field_id.type_idx);
+                const name = try dexfile.getString(field_id.name_idx);
+                try std.fmt.format(stdout.writer(), "\t{} {s} {s}\n", .{
+                    data.static_field.access_flags,
+                    t,
+                    name,
+                });
+            }
+
+            try std.fmt.format(stdout.writer(), "Instance Fields:\n", .{});
+            var instance_field_iter = dexfile.classDataIterator(class_data, .instance_field);
+            while (instance_field_iter.next()) |data| {
+                const field_id = try dexfile.getField(data.instance_field.field_idx);
+                const t = try dexfile.getString(field_id.type_idx);
+                const name = try dexfile.getString(field_id.name_idx);
+                try std.fmt.format(stdout.writer(), "\t{} {s} {s}\n", .{
+                    data.instance_field.access_flags,
+                    t,
+                    name,
+                });
+            }
+
+            try std.fmt.format(stdout.writer(), "Direct Methods:\n", .{});
+            var direct_method_iter = dexfile.classDataIterator(class_data, .direct_method);
+            while (direct_method_iter.next()) |data| {
+                const method_id = try dexfile.getMethod(data.direct_method.method_idx);
+                const name_str = try dexfile.getString(method_id.name_idx);
+                try std.fmt.format(stdout.writer(), "\t{} {s} {}\n", .{
+                    data.direct_method.access_flags,
+                    name_str,
+                    data.direct_method.code_off,
+                });
+            }
+
+            try std.fmt.format(stdout.writer(), "Virtual Methods:\n", .{});
+            var virtual_method_iter = dexfile.classDataIterator(class_data, .virtual_method);
+            while (virtual_method_iter.next()) |data| {
+                const method_id = try dexfile.getMethod(data.virtual_method.method_idx);
+                const name_str = try dexfile.getString(method_id.name_idx);
+                try std.fmt.format(stdout.writer(), "\t{} {s} {}\n", .{
+                    data.virtual_method.access_flags,
+                    name_str,
+                    data.virtual_method.code_off,
+                });
+            }
         }
     }
-    // for (classes.class_defs.items, classes.class_data.items) |def, data| {
-    //     const class = try classes.getTypeString(classes.type_ids.items[def.class_idx]);
-    //     const superclass = if (def.superclass_idx == dex.NO_INDEX) "null" else (try classes.getTypeString(classes.type_ids.items[def.superclass_idx])).data;
-    //     const file_name = if (def.source_file_idx == dex.NO_INDEX) "null" else (try classes.getString(classes.string_ids.items[def.source_file_idx])).data;
-    //     try std.fmt.format(stdout.writer(), "{} Class {s} extends {s} defined in {s}\n", .{ def.access_flags, class.data, superclass, file_name });
-
-    //     var static_field_id: u32 = 0;
-    //     for (data.static_fields.items, 0..) |field, i| {
-    //         static_field_id = if (i == 0) field.field_idx_diff else static_field_id +% field.field_idx_diff;
-    //         try stdout.writer().print("\t{} ", .{field.access_flags});
-    //         try classes.writeFieldString(stdout.writer(), static_field_id);
-    //     }
-
-    //     var instance_field_id: u32 = 0;
-    //     for (data.instance_fields.items, 0..) |field, i| {
-    //         instance_field_id = if (i == 0) field.field_idx_diff else instance_field_id +% field.field_idx_diff;
-    //         try stdout.writer().print("\t{} ", .{field.access_flags});
-    //         try classes.writeFieldString(stdout.writer(), instance_field_id);
-    //     }
-
-    //     var direct_method_id: u32 = 0;
-    //     for (data.direct_methods.items, 0..) |method, i| {
-    //         direct_method_id = if (i == 0) method.method_idx_diff else direct_method_id +% method.method_idx_diff;
-    //         try stdout.writer().print("\t{} ", .{method.access_flags});
-    //         try classes.writeMethodString(alloc, stdout.writer(), direct_method_id);
-
-    //         if (method.code_off == 0) continue;
-
-    //         try file.seekTo(method.code_off);
-    //         const code_item = try dex.CodeItem.read(file.reader(), alloc);
-    //         defer code_item.deinit(alloc);
-    //         try stdout.writer().print("{}\n", .{code_item});
-    //     }
-
-    //     var virtual_method_id: u32 = 0;
-    //     for (data.virtual_methods.items, 0..) |method, i| {
-    //         virtual_method_id = if (i == 0) method.method_idx_diff else virtual_method_id +% method.method_idx_diff;
-    //         try stdout.writer().print("\t{} ", .{method.access_flags});
-    //         try classes.writeMethodString(alloc, stdout.writer(), virtual_method_id);
-
-    //         if (method.code_off == 0) continue;
-
-    //         try file.seekTo(method.code_off);
-    //         const code_item = try dex.CodeItem.read(file.reader(), alloc);
-    //         defer code_item.deinit(alloc);
-    //         try stdout.writer().print("{}\n", .{code_item});
-    //     }
-    // }
 }
 
 fn printInfo(document: binxml.Document, stdout: std.fs.File) !void {

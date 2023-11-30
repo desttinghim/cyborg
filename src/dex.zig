@@ -1138,7 +1138,62 @@ pub const Dex = struct {
         };
     }
 
-    // pub fn getMethod(dex: Dex, method_id: usize) MethodIdItem {}
+    pub fn getClassData(dex: Dex, class_def: ClassDefItem) !ClassDataItem {
+        if (class_def.class_data_off > dex.file_buffer.len) return error.OutOfBounds;
+        const slice = dex.file_buffer[class_def.class_data_off..];
+
+        var fbs = std.io.fixedBufferStream(slice);
+        const reader = fbs.reader();
+        const static_fields_size = try std.leb.readULEB128(u32, reader);
+        const instance_fields_size = try std.leb.readULEB128(u32, reader);
+        const direct_methods_size = try std.leb.readULEB128(u32, reader);
+        const virtual_methods_size = try std.leb.readULEB128(u32, reader);
+
+        const static_fields_rel_off: u32 = @intCast(fbs.getPos() catch unreachable);
+        {
+            var i: usize = 0;
+            while (i < static_fields_size) : (i += 1) {
+                // field idx diff
+                _ = try std.leb.readULEB128(u32, reader);
+                // access flags
+                _ = try std.leb.readULEB128(u32, reader);
+            }
+        }
+        const instance_fields_rel_off: u32 = @intCast(fbs.getPos() catch unreachable);
+        {
+            var i: usize = 0;
+            while (i < instance_fields_size) : (i += 1) {
+                // field idx diff
+                _ = try std.leb.readULEB128(u32, reader);
+                // access flags
+                _ = try std.leb.readULEB128(u32, reader);
+            }
+        }
+        const direct_methods_rel_off: u32 = @as(u32, @intCast(fbs.getPos() catch unreachable));
+        {
+            var i: usize = 0;
+            while (i < direct_methods_size) : (i += 1) {
+                // method idx diff
+                _ = try std.leb.readULEB128(u32, reader);
+                // access flags
+                _ = try std.leb.readULEB128(u32, reader);
+                // code offset
+                _ = try std.leb.readULEB128(u32, reader);
+            }
+        }
+        const virtual_methods_rel_off: u32 = @as(u32, @intCast(fbs.getPos() catch unreachable));
+
+        return .{
+            .instance_fields_size = instance_fields_size,
+            .static_fields_size = static_fields_size,
+            .direct_methods_size = direct_methods_size,
+            .virtual_methods_size = virtual_methods_size,
+            .instance_fields_off = instance_fields_rel_off + class_def.class_data_off,
+            .static_fields_off = static_fields_rel_off + class_def.class_data_off,
+            .direct_methods_off = direct_methods_rel_off + class_def.class_data_off,
+            .virtual_methods_off = virtual_methods_rel_off + class_def.class_data_off,
+        };
+    }
 
     pub const MapIterator = struct {
         dex: *const Dex,
@@ -1262,6 +1317,97 @@ pub const Dex = struct {
         return .{
             .dex = dex,
             .index = 0,
+        };
+    }
+
+    pub const ClassDataIterator = struct {
+        dex: *const Dex,
+        class_data: ClassDataItem,
+        last_index: u32,
+        index: u32,
+        fbs: std.io.FixedBufferStream([]const u8),
+        which: Which,
+        pub const Which = enum {
+            static_field,
+            instance_field,
+            direct_method,
+            virtual_method,
+        };
+        pub const Data = union(Which) {
+            static_field: EncodedField,
+            instance_field: EncodedField,
+            direct_method: EncodedMethod,
+            virtual_method: EncodedMethod,
+        };
+        pub fn next(iter: *ClassDataIterator) ?Data {
+            const reader = iter.fbs.reader();
+            switch (iter.which) {
+                .static_field => {
+                    if (iter.index >= iter.class_data.static_fields_size) return null;
+                    // This is the field index, encoded as a difference
+                    const field_idx = iter.last_index + (std.leb.readULEB128(u32, reader) catch return null);
+                    iter.last_index = field_idx;
+                    const access_flags: AccessFlags = @bitCast(std.leb.readULEB128(u32, reader) catch return null);
+                    iter.index += 1;
+                    return @unionInit(Data, "static_field", .{
+                        .field_idx = field_idx,
+                        .access_flags = access_flags,
+                    });
+                },
+                .instance_field => {
+                    if (iter.index >= iter.class_data.instance_fields_size) return null;
+                    const field_idx = iter.last_index + (std.leb.readULEB128(u32, reader) catch return null);
+                    iter.last_index = field_idx;
+                    const access_flags: AccessFlags = @bitCast(std.leb.readULEB128(u32, reader) catch return null);
+                    iter.index += 1;
+                    return @unionInit(Data, "instance_field", .{
+                        .field_idx = field_idx,
+                        .access_flags = access_flags,
+                    });
+                },
+                .direct_method => {
+                    if (iter.index >= iter.class_data.direct_methods_size) return null;
+                    const method_idx = iter.last_index + (std.leb.readULEB128(u32, reader) catch return null);
+                    iter.last_index = method_idx;
+                    const access_flags: AccessFlags = @bitCast(std.leb.readULEB128(u32, reader) catch return null);
+                    const code_off = std.leb.readULEB128(u32, reader) catch return null;
+                    iter.index += 1;
+                    return @unionInit(Data, "direct_method", .{
+                        .method_idx = method_idx,
+                        .access_flags = access_flags,
+                        .code_off = code_off,
+                    });
+                },
+                .virtual_method => {
+                    if (iter.index >= iter.class_data.virtual_methods_size) return null;
+                    const method_idx = iter.last_index + (std.leb.readULEB128(u32, reader) catch return null);
+                    iter.last_index = method_idx;
+                    const access_flags: AccessFlags = @bitCast(std.leb.readULEB128(u32, reader) catch return null);
+                    const code_off = std.leb.readULEB128(u32, reader) catch return null;
+                    iter.index += 1;
+                    return @unionInit(Data, "virtual_method", .{
+                        .method_idx = method_idx,
+                        .access_flags = access_flags,
+                        .code_off = code_off,
+                    });
+                },
+            }
+        }
+    };
+    pub fn classDataIterator(dex: *const Dex, class_data: ClassDataItem, kind: ClassDataIterator.Which) ClassDataIterator {
+        const offset = switch (kind) {
+            .static_field => class_data.static_fields_off,
+            .instance_field => class_data.instance_fields_off,
+            .direct_method => class_data.direct_methods_off,
+            .virtual_method => class_data.virtual_methods_off,
+        };
+        return .{
+            .dex = dex,
+            .class_data = class_data,
+            .last_index = 0,
+            .fbs = std.io.fixedBufferStream(dex.file_buffer[offset..]),
+            .index = 0,
+            .which = kind,
         };
     }
 
@@ -1911,75 +2057,33 @@ const MethodHandleTypeCode = enum(u16) {
 };
 
 const ClassDataItem = struct {
-    static_fields: std.ArrayListUnmanaged(EncodedField),
-    instance_fields: std.ArrayListUnmanaged(EncodedField),
-    direct_methods: std.ArrayListUnmanaged(EncodedMethod),
-    virtual_methods: std.ArrayListUnmanaged(EncodedMethod),
+    /// Number of static fields in item
+    static_fields_size: u32,
+    /// Number of instance fields in item
+    instance_fields_size: u32,
+    /// Number of direct methods in item
+    direct_methods_size: u32,
+    /// Number of virtual methods in item
+    virtual_methods_size: u32,
 
-    pub fn read(alloc: std.mem.Allocator, reader: anytype) !ClassDataItem {
-        const static_fields_size = try std.leb.readULEB128(u32, reader);
-        const instance_fields_size = try std.leb.readULEB128(u32, reader);
-        const direct_methods_size = try std.leb.readULEB128(u32, reader);
-        const virtual_methods_size = try std.leb.readULEB128(u32, reader);
-
-        var static_fields = try std.ArrayListUnmanaged(EncodedField).initCapacity(alloc, static_fields_size);
-        var instance_fields = try std.ArrayListUnmanaged(EncodedField).initCapacity(alloc, instance_fields_size);
-        var direct_methods = try std.ArrayListUnmanaged(EncodedMethod).initCapacity(alloc, direct_methods_size);
-        var virtual_methods = try std.ArrayListUnmanaged(EncodedMethod).initCapacity(alloc, virtual_methods_size);
-
-        for (0..static_fields_size) |_| {
-            static_fields.appendAssumeCapacity(try EncodedField.read(reader));
-        }
-        for (0..instance_fields_size) |_| {
-            instance_fields.appendAssumeCapacity(try EncodedField.read(reader));
-        }
-        for (0..direct_methods_size) |_| {
-            direct_methods.appendAssumeCapacity(try EncodedMethod.read(reader));
-        }
-        for (0..virtual_methods_size) |_| {
-            virtual_methods.appendAssumeCapacity(try EncodedMethod.read(reader));
-        }
-
-        return .{
-            .static_fields = static_fields,
-            .instance_fields = instance_fields,
-            .direct_methods = direct_methods,
-            .virtual_methods = virtual_methods,
-        };
-    }
+    static_fields_off: u32,
+    instance_fields_off: u32,
+    direct_methods_off: u32,
+    virtual_methods_off: u32,
 };
 
 const EncodedField = struct {
-    /// Index into field_ids, encoded as difference from last item
-    field_idx_diff: u32,
+    /// Index into field_ids
+    field_idx: u32,
     access_flags: AccessFlags,
-
-    pub fn read(reader: anytype) !EncodedField {
-        const field_idx = try std.leb.readULEB128(u32, reader);
-        const access_flags: AccessFlags = @bitCast(try std.leb.readULEB128(u32, reader));
-        return .{
-            .field_idx_diff = field_idx,
-            .access_flags = access_flags,
-        };
-    }
 };
 
 const EncodedMethod = struct {
-    /// Index into method_ids, encoded as difference from last item
-    method_idx_diff: u32,
+    /// Index into method_ids
+    method_idx: u32,
     access_flags: AccessFlags,
+    /// Offset into file
     code_off: u32,
-
-    pub fn read(reader: anytype) !EncodedMethod {
-        const method_idx = try std.leb.readULEB128(u32, reader);
-        const access_flags: AccessFlags = @bitCast(try std.leb.readULEB128(u32, reader));
-        const code_off = try std.leb.readULEB128(u32, reader);
-        return .{
-            .method_idx_diff = method_idx,
-            .access_flags = access_flags,
-            .code_off = code_off,
-        };
-    }
 };
 
 const TypeList = struct {
