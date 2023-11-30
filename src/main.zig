@@ -439,10 +439,10 @@ pub fn readDex(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         try std.fmt.format(stdout.writer(), "Map Item: {}\n", .{list_item});
     }
 
-    // var string_iter = dexfile.stringIterator();
-    // while (string_iter.next()) |string| {
-    //     try std.fmt.format(stdout.writer(), "String: {s}\n", .{string.*});
-    // }
+    var string_iter = dexfile.stringIterator();
+    while (string_iter.next()) |string| {
+        try std.fmt.format(stdout.writer(), "String: {s}\n", .{string});
+    }
 
     // var type_iter = dexfile.typeIterator();
     // while (type_iter.next()) |t| {
