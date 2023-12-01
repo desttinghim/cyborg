@@ -55,6 +55,13 @@ pub fn main() !void {
         tokens.tags.items.len,
     });
 
+    for (tokens.indices.items, tokens.tags.items) |index, tag| {
+        try stdout.writer().print("{}: {}\n", .{
+            index,
+            tag,
+        });
+    }
+
     const module = try parseTokens(alloc, file_map, tokens);
     for (module.classes.items) |class| {
         if (class.extends) |extends| {
@@ -74,6 +81,11 @@ pub fn main() !void {
 
     // Lower to dex file
     // dex.Dex.createFromModule(alloc, )
+    try stdout.writer().print("\nPrinting Strings:\n", .{});
+    var string_iter = module.getStringIterator();
+    while (string_iter.next()) |string| {
+        try stdout.writer().print("{s}\t", .{string.*});
+    }
 }
 
 const Tokens = struct {
@@ -119,7 +131,7 @@ pub fn tokenize(alloc: std.mem.Allocator, file_map: []const u8) !Tokens {
                     '#' => tokenize_state = .Literal,
                     '@' => tokenize_state = .Label,
                     '.' => tokenize_state = .Directive,
-                    '$' => tokenize_state = .Register,
+                    'v' => tokenize_state = .Register,
                     else => tokenize_state = .Instruction,
                 }
             },
@@ -210,8 +222,9 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
     };
 
     var state: ParseState = .top;
-    var module = dalvik.Module{ .classes = .{} };
+    var module = dalvik.Module.init(alloc);
     var current_class: ?*dalvik.Module.Class = null;
+    var current_class_t: ?dalvik.Module.TypeValue = null;
     var current_method: ?*dalvik.Module.Method = null;
     var current_instruction: ?*dalvik.Module.Instruction = null;
 
@@ -268,6 +281,8 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
             },
             .class => {
                 current_class = try module.classes.addOne(alloc);
+                current_class_t = try dalvik.Module.TypeValue.read(string);
+                try module.addType(current_class_t.?);
                 current_class.?.* = .{
                     .fields = .{},
                     .methods = .{},
@@ -287,6 +302,7 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
                         field_struct.access_flags = data[0];
                         field_struct.type = t;
                         field_struct.name = string;
+                        try module.addField(current_class_t.?, field_struct);
                         state = .top;
                     } else {
                         const t = try dalvik.Module.TypeValue.read(string);
@@ -316,6 +332,7 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
                                 method.parameters = .{};
                             }
                             current_method = method;
+                            try module.addMethod(current_class_t.?, method);
                             state = .top;
                             data.*[1].deinit(alloc);
                         } else {
@@ -351,6 +368,10 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
                                 value.*.b = try std.fmt.parseInt(u16, string[1..], 10);
                             },
                             3 => {
+                                const t = try dalvik.Module.TypeValue.read(string);
+                                value.*.class = t;
+                            },
+                            4 => {
                                 value.*.field = string;
                                 state = .top;
                             },
@@ -364,13 +385,17 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
                                 value.*.argument_count = try std.fmt.parseInt(u4, string, 10);
                             },
                             2 => {
+                                const t = try dalvik.Module.TypeValue.read(string);
+                                value.*.class = t;
+                            },
+                            3 => {
                                 value.*.method = string;
                             },
-                            3...6 => {
+                            4...7 => {
                                 // std.log.info("{s}", .{string});
                                 std.debug.assert(string[0] == 'v');
                                 value.*.registers[token_count.* - 3] = try std.fmt.parseInt(u4, string[1..], 10);
-                                if (token_count.* == 6) state = .top;
+                                if (token_count.* == 7) state = .top;
                             },
                             else => unreachable,
                         }

@@ -1,5 +1,60 @@
 pub const Module = struct {
+    arena: std.heap.ArenaAllocator,
+    strings: std.StringHashMapUnmanaged(void),
+    types: std.StringHashMapUnmanaged(TypeValue),
+    fields: std.StringHashMapUnmanaged(void),
+    methods: std.StringHashMapUnmanaged(void),
     classes: std.ArrayListUnmanaged(Class),
+
+    pub fn init(alloc: std.mem.Allocator) Module {
+        return .{
+            .arena = std.heap.ArenaAllocator.init(alloc),
+            .strings = .{},
+            .types = .{},
+            .fields = .{},
+            .methods = .{},
+            .classes = .{},
+        };
+    }
+
+    pub fn deinit(module: *Module) void {
+        module.arena.deinit();
+    }
+
+    pub fn addString(module: *Module, string: []const u8) !void {
+        const alloc = module.arena.allocator();
+        try module.strings.put(alloc, string, {});
+    }
+
+    pub fn addType(module: *Module, t: TypeValue) !void {
+        const alloc = module.arena.allocator();
+        const type_string = try std.fmt.allocPrint(alloc, "{}", .{t});
+        try module.addString(type_string);
+        try module.types.put(alloc, type_string, t);
+    }
+
+    pub fn addField(module: *Module, class: TypeValue, field: *const Field) !void {
+        const alloc = module.arena.allocator();
+        try module.addType(field.type);
+        try module.addType(class);
+        try module.addString(field.name);
+        try module.fields.put(alloc, field.name, {});
+    }
+
+    pub fn addMethod(module: *Module, class: TypeValue, method: *const Method) !void {
+        const alloc = module.arena.allocator();
+        try module.addType(method.return_type);
+        try module.addType(class);
+        const shorty = try alloc.alloc(u8, 1 + method.parameters.items.len);
+        shorty[0] = method.return_type.getShortyChar();
+        for (method.parameters.items, 1..) |param, i| {
+            try module.addType(param);
+            shorty[i] = param.getShortyChar();
+        }
+        try module.addString(shorty);
+        try module.addString(method.name);
+        try module.fields.put(alloc, method.name, {});
+    }
 
     pub const Instruction = union(Tag) {
         // nop,
@@ -71,6 +126,7 @@ pub const Module = struct {
         @"iput-wide": struct {
             a: Register,
             b: Register,
+            class: TypeValue,
             field: []const u8,
         },
         // @"iput-object": vAvBcCCCC,
@@ -96,6 +152,7 @@ pub const Module = struct {
         // @"invoke-super",
         @"invoke-direct": struct {
             argument_count: u4,
+            class: TypeValue,
             method: []const u8,
             registers: [5]u4 = [_]u4{ 0, 0, 0, 0, 0 },
         },
@@ -246,6 +303,21 @@ pub const Module = struct {
         float,
         double,
         object: []const u8,
+
+        pub fn getShortyChar(t: Type) u8 {
+            return switch (t) {
+                .void => 'V',
+                .boolean => 'Z',
+                .byte => 'B',
+                .short => 'S',
+                .char => 'C',
+                .int => 'I',
+                .long => 'J',
+                .float => 'F',
+                .double => 'D',
+                .object => 'L',
+            };
+        }
     };
     pub const TypeValue = struct {
         /// The type of the value
@@ -279,6 +351,11 @@ pub const Module = struct {
                 .t = t,
                 .array_dimensions = bracket_count,
             };
+        }
+
+        pub fn getShortyChar(value: TypeValue) u8 {
+            if (value.array_dimensions != 0) return 'L';
+            return value.t.getShortyChar();
         }
 
         pub fn format(type_value: TypeValue, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
@@ -320,6 +397,10 @@ pub const Module = struct {
         return_type: TypeValue,
         code: std.ArrayListUnmanaged(Instruction),
     };
+
+    pub fn getStringIterator(module: *const Module) std.StringHashMap(void).KeyIterator {
+        return module.strings.keyIterator();
+    }
 };
 
 const std = @import("std");
