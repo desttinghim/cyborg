@@ -84,7 +84,13 @@ pub fn main() !void {
     try stdout.writer().print("\nPrinting Strings:\n", .{});
     var string_iter = module.getStringIterator();
     while (string_iter.next()) |string| {
-        try stdout.writer().print("{s}\t", .{string.*});
+        try stdout.writer().print("{s}\n", .{string.*});
+    }
+
+    try stdout.writer().print("\nPrinting Types:\n", .{});
+    var type_iter = module.getTypeIterator();
+    while (type_iter.next()) |t| {
+        try stdout.writer().print("{s}\n", .{t.*});
     }
 }
 
@@ -331,6 +337,7 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
                             } else {
                                 method.parameters = .{};
                             }
+                            try method.calculateShorty(&module);
                             current_method = method;
                             try module.addMethod(current_class_t.?, method);
                             state = .top;

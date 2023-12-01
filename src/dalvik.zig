@@ -45,13 +45,10 @@ pub const Module = struct {
         const alloc = module.arena.allocator();
         try module.addType(method.return_type);
         try module.addType(class);
-        const shorty = try alloc.alloc(u8, 1 + method.parameters.items.len);
-        shorty[0] = method.return_type.getShortyChar();
-        for (method.parameters.items, 1..) |param, i| {
+        for (method.parameters.items) |param| {
             try module.addType(param);
-            shorty[i] = param.getShortyChar();
         }
-        try module.addString(shorty);
+        try module.addString(method.shorty);
         try module.addString(method.name);
         try module.fields.put(alloc, method.name, {});
     }
@@ -393,13 +390,28 @@ pub const Module = struct {
     pub const Method = struct {
         access_flags: dex.AccessFlags,
         name: []const u8,
+        shorty: []const u8 = undefined,
         parameters: std.ArrayListUnmanaged(TypeValue),
         return_type: TypeValue,
         code: std.ArrayListUnmanaged(Instruction),
+
+        pub fn calculateShorty(method: *Method, module: *Module) !void {
+            const alloc = module.arena.allocator();
+            const shorty = try alloc.alloc(u8, 1 + method.parameters.items.len);
+            shorty[0] = method.return_type.getShortyChar();
+            for (method.parameters.items, 1..) |param, i| {
+                shorty[i] = param.getShortyChar();
+            }
+            method.shorty = shorty;
+        }
     };
 
     pub fn getStringIterator(module: *const Module) std.StringHashMap(void).KeyIterator {
         return module.strings.keyIterator();
+    }
+
+    pub fn getTypeIterator(module: *const Module) std.StringHashMap(TypeValue).KeyIterator {
+        return module.types.keyIterator();
     }
 };
 
