@@ -71,6 +71,9 @@ pub fn main() !void {
             try stdout.writer().print("\t{} {} {s}\n", .{ method.access_flags, method.return_type, method.name });
         }
     }
+
+    // Lower to dex file
+    // dex.Dex.createFromModule(alloc, )
 }
 
 const Tokens = struct {
@@ -186,7 +189,7 @@ pub fn tokenize(alloc: std.mem.Allocator, file_map: []const u8) !Tokens {
     };
 }
 
-pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Tokens) !Dalvik {
+pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Tokens) !dalvik.Module {
     // # Parsing
     // Takes the token list and tries to construct a dex file from them.
     // This is the code that will ensure type checking and construct a string pool
@@ -201,16 +204,16 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
         top,
         class,
         extends,
-        field: struct { dex.AccessFlags, ?Dalvik.TypeValue },
-        method: struct { dex.AccessFlags, std.ArrayListUnmanaged(Dalvik.TypeValue) },
+        field: struct { dex.AccessFlags, ?dalvik.Module.TypeValue },
+        method: struct { dex.AccessFlags, std.ArrayListUnmanaged(dalvik.Module.TypeValue) },
         instruction: u32,
     };
 
     var state: ParseState = .top;
-    var module = Dalvik{ .classes = .{} };
-    var current_class: ?*Dalvik.Class = null;
-    var current_method: ?*Dalvik.Method = null;
-    var current_instruction: ?*Dalvik.Instruction = null;
+    var module = dalvik.Module{ .classes = .{} };
+    var current_class: ?*dalvik.Module.Class = null;
+    var current_method: ?*dalvik.Module.Method = null;
+    var current_instruction: ?*dalvik.Module.Instruction = null;
 
     for (tokens.indices.items, tokens.tags.items) |index, tag| {
         var end = index + 1;
@@ -236,14 +239,14 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
             .top => {
                 switch (tag) {
                     .Instruction => unknown: {
-                        const which = std.meta.stringToEnum(Dalvik.Instruction.Tag, string) orelse break :unknown;
+                        const which = std.meta.stringToEnum(dalvik.Module.Instruction.Tag, string) orelse break :unknown;
                         current_instruction = try current_method.?.code.addOne(alloc);
                         switch (which) {
                             .@"return-void" => {
                                 current_instruction.?.* = .@"return-void";
                             },
                             inline else => |instr| {
-                                current_instruction.?.* = @unionInit(Dalvik.Instruction, @tagName(instr), undefined);
+                                current_instruction.?.* = @unionInit(dalvik.Module.Instruction, @tagName(instr), undefined);
                                 state = .{ .instruction = 0 };
                             },
                         }
@@ -286,7 +289,7 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
                         field_struct.name = string;
                         state = .top;
                     } else {
-                        const t = try Dalvik.TypeValue.read(string);
+                        const t = try dalvik.Module.TypeValue.read(string);
                         state = .{ .field = .{ data[0], t } };
                     }
                     continue;
@@ -297,7 +300,7 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
                 if (data.*[0].addFromString(string)) |value| {
                     data.*[0] = value;
                 } else |_| {
-                    if (Dalvik.TypeValue.read(string)) |value| {
+                    if (dalvik.Module.TypeValue.read(string)) |value| {
                         try data.*[1].append(alloc, value);
                     } else |_| {
                         if (data.*[1].items.len >= 1) {
@@ -307,8 +310,8 @@ pub fn parseTokens(alloc: std.mem.Allocator, file_map: []const u8, tokens: Token
                             method.return_type = data.*[1].items[0];
                             method.code = .{};
                             if (data.*[1].items.len >= 2) {
-                                const slice = try alloc.dupe(Dalvik.TypeValue, data.*[1].items[1..]);
-                                method.parameters = std.ArrayListUnmanaged(Dalvik.TypeValue).fromOwnedSlice(slice);
+                                const slice = try alloc.dupe(dalvik.Module.TypeValue, data.*[1].items[1..]);
+                                method.parameters = std.ArrayListUnmanaged(dalvik.Module.TypeValue).fromOwnedSlice(slice);
                             } else {
                                 method.parameters = .{};
                             }
@@ -408,330 +411,6 @@ fn parse_file_name(infile_path: []const u8, expected_extension: []const u8) !Par
     };
 }
 
-const Dalvik = struct {
-    classes: std.ArrayListUnmanaged(Class),
-
-    const Instruction = union(Tag) {
-        // nop,
-        // move: struct { Register, Register },
-        // @"move-wide": struct { Register, Register },
-        // @"move-object": Register,
-        // @"move-result": Register,
-        // @"move-result-wide": Register,
-        @"move-result-object": Register,
-        // @"move-exception": Register,
-        @"return-void",
-        // @"return": Register,
-        // @"return-wide": Register,
-        @"return-object": Register,
-        // @"const": struct { Register, Literal },
-        // @"monitor-enter": Register,
-        // @"monitor-exit": Register,
-        // @"check-cast": struct { Register, Literal },
-        // @"instance-of": struct { Register, Register, Literal },
-        // @"array-length": struct { Register, Register },
-        // @"new-instance": struct { Register, Literal },
-        // @"new-array": struct { Register, Register, Literal },
-        // @"filled-new-array",
-        // @"filled-new-array/range",
-        // @"filled-array-data",
-        // throw: struct { Register },
-        // goto: struct { Literal },
-        // @"packed-switch",
-        // @"sparse-switch",
-        // @"cmpl-float": struct { Register, Register, Register },
-        // @"cmpg-float": struct { Register, Register, Register },
-        // @"cmpl-double": struct { Register, Register, Register },
-        // @"cmpg-double": struct { Register, Register, Register },
-        // @"cmp-long": struct { Register, Register, Register },
-        // @"if-eq": struct { Register, Register, Literal },
-        // @"if-ne": struct { Register, Register, Literal },
-        // @"if-lt": struct { Register, Register, Literal },
-        // @"if-ge": struct { Register, Register, Literal },
-        // @"if-gt": struct { Register, Register, Literal },
-        // @"if-le": struct { Register, Register, Literal },
-        // @"ifz-eq": struct { Register, Literal },
-        // @"ifz-ne": struct { Register, Literal },
-        // @"ifz-lt": struct { Register, Literal },
-        // @"ifz-ge": struct { Register, Literal },
-        // @"ifz-gt": struct { Register, Literal },
-        // @"ifz-le": struct { Register, Literal },
-        // aget,
-        // @"aget-wide",
-        // @"aget-object",
-        // @"aget-boolean",
-        // @"aget-byte",
-        // @"aget-char",
-        // @"aget-short",
-        // aput,
-        // @"aput-wide",
-        // @"aput-object",
-        // @"aput-boolean",
-        // @"aput-byte",
-        // @"aput-char",
-        // @"aput-short",
-        // iget: vAvBcCCCC,
-        // @"iget-wide": vAvBcCCCC,
-        // @"iget-object": vAvBcCCCC,
-        // @"iget-boolean": vAvBcCCCC,
-        // @"iget-byte": vAvBcCCCC,
-        // @"iget-char": vAvBcCCCC,
-        // @"iget-short": vAvBcCCCC,
-        // iput: vAvBcCCCC,
-        @"iput-wide": struct {
-            a: Register,
-            b: Register,
-            field: []const u8,
-        },
-        // @"iput-object": vAvBcCCCC,
-        // @"iput-boolean": vAvBcCCCC,
-        // @"iput-byte": vAvBcCCCC,
-        // @"iput-char": vAvBcCCCC,
-        // @"iput-short": vAvBcCCCC,
-        // sget: vAAcBBBB,
-        // @"sget-wide": vAAcBBBB,
-        // @"sget-object": vAAcBBBB,
-        // @"sget-boolean": vAAcBBBB,
-        // @"sget-byte": vAAcBBBB,
-        // @"sget-char": vAAcBBBB,
-        // @"sget-short": vAAcBBBB,
-        // sput: vAAcBBBB,
-        // @"sput-wide",
-        // @"sput-object",
-        // @"sput-boolean",
-        // @"sput-byte",
-        // @"sput-char": vAAcBBBB,
-        // @"sput-short",
-        // @"invoke-virtual",
-        // @"invoke-super",
-        @"invoke-direct": struct {
-            argument_count: u4,
-            method: []const u8,
-            registers: [5]u4 = [_]u4{ 0, 0, 0, 0, 0 },
-        },
-        // @"invoke-static",
-        // @"invoke-interface",
-        // @"invoke-virtual/range",
-        // @"invoke-super/range",
-        // @"invoke-direct/range",
-        // @"invoke-static/range",
-        // @"invoke-interface/range",
-        // @"neg-int": vAvB,
-        // @"not-int",
-        // @"neg-long",
-        // @"not-long",
-        // @"neg-float",
-        // @"neg-double",
-        // @"int-to-long",
-        // @"int-to-float",
-        // @"int-to-double",
-        // @"long-to-int",
-        // @"long-to-float",
-        // @"long-to-double",
-        // @"float-to-int",
-        // @"float-to-long",
-        // @"float-to-double",
-        // @"double-to-int",
-        // @"double-to-long",
-        // @"double-to-float",
-        // @"int-to-byte",
-        // @"int-to-char",
-        // @"int-to-short",
-        // @"add-int",
-        // @"sub-int": vAAvBBvCC,
-        // @"mul-int",
-        // @"div-int",
-        // @"rem-int": vAAvBBvCC,
-        // @"and-int",
-        // @"or-int",
-        // @"xor-int",
-        // @"shl-int",
-        // @"shr-int",
-        // @"ushr-int",
-        // @"add-long",
-        // @"sub-long",
-        // @"mul-long",
-        // @"div-long",
-        // @"rem-long",
-        // @"and-long",
-        // @"or-long",
-        // @"xor-long",
-        // @"shl-long",
-        // @"shr-long",
-        // @"ushr-long",
-        // @"add-float",
-        // @"sub-float",
-        // @"mul-float",
-        // @"div-float",
-        // @"rem-float",
-        // @"add-double",
-        // @"sub-double",
-        // @"mul-double",
-        // @"div-double",
-        // @"rem-double",
-        // @"add-int/2addr",
-        // @"sub-int/2addr",
-        // @"mul-int/2addr",
-        // @"div-int/2addr",
-        // @"rem-int/2addr",
-        // @"and-int/2addr",
-        // @"or-int/2addr",
-        // @"xor-int/2addr",
-        // @"shl-int/2addr",
-        // @"shr-int/2addr",
-        // @"ushr-int/2addr",
-        // @"add-long/2addr",
-        // @"sub-long/2addr",
-        // @"mul-long/2addr",
-        // @"div-long/2addr",
-        // @"rem-long/2addr",
-        // @"and-long/2addr",
-        // @"or-long/2addr",
-        // @"xor-long/2addr",
-        // @"shl-long/2addr",
-        // @"shr-long/2addr",
-        // @"ushr-long/2addr",
-        // @"add-float/2addr",
-        // @"sub-float/2addr",
-        // @"mul-float/2addr",
-        // @"div-float/2addr",
-        // @"rem-float/2addr",
-        // @"add-double/2addr",
-        // @"sub-double/2addr",
-        // @"mul-double/2addr",
-        // @"div-double/2addr",
-        // @"rem-double/2addr",
-        // @"add-int/lit16",
-        // @"sub-int/lit16",
-        // @"mul-int/lit16",
-        // @"div-int/lit16",
-        // @"rem-int/lit16",
-        // @"and-int/lit16",
-        // @"or-int/lit16",
-        // @"xor-int/lit16",
-        // @"add-int/lit8",
-        // @"sub-int/lit8",
-        // @"mul-int/lit8",
-        // @"div-int/lit8",
-        // @"rem-int/lit8",
-        // @"and-int/lit8",
-        // @"or-int/lit8",
-        // @"xor-int/lit8",
-        // @"shl-int/lit8",
-        // @"shr-int/lit8",
-        // @"ushr-int/lit8",
-        // @"invoke-polymorphic",
-        // @"invoke-polymorphic/range",
-        // @"invoke-custom",
-        // @"invoke-custom/range",
-        // @"const-method-handle",
-        // @"const-method-type",
-
-        const Tag = enum {
-            @"move-result-object",
-            @"return-void",
-            @"return-object",
-            @"iput-wide",
-            @"invoke-direct",
-        };
-        const Register = u16;
-        const Literal = union(enum) {
-            uint: u64,
-            int: i64,
-            string: []const u8,
-            class: []const u8,
-        };
-    };
-
-    const Type = union(enum) {
-        /// Only valid for method return types
-        void,
-
-        boolean,
-        byte,
-        short,
-        char,
-        int,
-        long,
-        float,
-        double,
-        object: []const u8,
-    };
-    const TypeValue = struct {
-        /// The type of the value
-        t: Type,
-        /// if 0, it is NOT an array
-        array_dimensions: u8 = 0,
-
-        pub fn read(string: []const u8) !TypeValue {
-            var index: usize = 0;
-            var bracket_count: u8 = 0;
-            while (index < string.len) : (index += 1) {
-                if (string[index] != '[') {
-                    break;
-                }
-                bracket_count += 1;
-            }
-            const t: Type = switch (string[index]) {
-                'V' => .void,
-                'Z' => .boolean,
-                'B' => .byte,
-                'S' => .short,
-                'C' => .char,
-                'I' => .int,
-                'J' => .long,
-                'F' => .float,
-                'D' => .double,
-                'L' => .{ .object = string[index..] },
-                else => return error.InvalidType,
-            };
-            return .{
-                .t = t,
-                .array_dimensions = bracket_count,
-            };
-        }
-
-        pub fn format(type_value: TypeValue, comptime fmt: []const u8, options: std.fmt.FormatOptions, writer: anytype) !void {
-            _ = fmt;
-            _ = options;
-            if (type_value.array_dimensions != 0) {
-                try writer.writeByteNTimes('[', type_value.array_dimensions);
-            }
-            switch (type_value.t) {
-                .void => try writer.writeByte('V'),
-                .boolean => try writer.writeByte('Z'),
-                .byte => try writer.writeByte('B'),
-                .short => try writer.writeByte('S'),
-                .char => try writer.writeByte('C'),
-                .int => try writer.writeByte('I'),
-                .long => try writer.writeByte('J'),
-                .float => try writer.writeByte('F'),
-                .double => try writer.writeByte('D'),
-                .object => |value| try writer.writeAll(value),
-            }
-        }
-    };
-    const Class = struct {
-        access_flags: dex.AccessFlags,
-        name: []const u8,
-        extends: ?[]const u8 = null,
-        fields: std.ArrayListUnmanaged(Field),
-        methods: std.ArrayListUnmanaged(Method),
-    };
-    const Field = struct {
-        access_flags: dex.AccessFlags,
-        name: []const u8,
-        type: TypeValue,
-    };
-    const Method = struct {
-        access_flags: dex.AccessFlags,
-        name: []const u8,
-        parameters: std.ArrayListUnmanaged(TypeValue),
-        return_type: TypeValue,
-        code: std.ArrayListUnmanaged(Instruction),
-    };
-};
-
 test "NativeInvocationHandler" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -748,7 +427,7 @@ test "NativeInvocationHandler" {
     try std.testing.expectEqual(@as(usize, 1), class.fields.items.len);
     const field = class.fields.items[0];
     try std.testing.expectEqual(dex.AccessFlags{ .Private = true }, field.access_flags);
-    try std.testing.expectEqual(Dalvik.TypeValue{ .t = .long }, field.type);
+    try std.testing.expectEqual(dalvik.Module.TypeValue{ .t = .long }, field.type);
     try std.testing.expectEqualStrings("ptr", field.name);
 
     try std.testing.expectEqual(@as(usize, 3), class.methods.items.len);
@@ -757,10 +436,10 @@ test "NativeInvocationHandler" {
         .Public = true,
         .Constructor = true,
     }, methods[0].access_flags);
-    try std.testing.expectEqual(Dalvik.TypeValue{ .t = .void }, methods[0].return_type);
+    try std.testing.expectEqual(dalvik.Module.TypeValue{ .t = .void }, methods[0].return_type);
     try std.testing.expectEqualSlices(
-        Dalvik.TypeValue,
-        &[_]Dalvik.TypeValue{.{ .t = .long }},
+        dalvik.Module.TypeValue,
+        &[_]dalvik.Module.TypeValue{.{ .t = .long }},
         methods[0].parameters.items,
     );
     try std.testing.expectEqualStrings("<init>", methods[0].name);
@@ -768,3 +447,4 @@ test "NativeInvocationHandler" {
 
 const std = @import("std");
 const dex = @import("dex.zig");
+const dalvik = @import("dalvik.zig");
