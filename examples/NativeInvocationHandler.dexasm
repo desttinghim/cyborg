@@ -1,6 +1,6 @@
 ( This is a dexasm file )
-.class NativeInvocationHandler
-.extends java.lang.Object
+.class LNativeInvocationHandler;
+.extends Ljava/lang/Object;
 
 .field private J ptr
 
@@ -8,15 +8,15 @@
 V ( Return type )
 J ( Parameters )
 <init> ( Name )
-    invoke-direct 1 java.lang.Object.<init> v0 v0 v0 v0
-    iput-wide v1 v0 NativeInvocationHandler.ptr
+    invoke-direct 1 Ljava/lang/Object; <init> v0 v0 v0 v0
+    iput-wide v1 v0 LNativeInvocationHandler; ptr
     return-void
 
 .method public 
 Ljava/lang/Object;
 Ljava/lang/Object; Ljava/lang/reflect/Method; [Ljava/lang/Object; ( Parameters )
 invoke ( Name )
-    invoke-direct 4 NativeInvocationHandler.invoke0 v0 v1 v2 v3
+    invoke-direct 4 LNativeInvocationHandler; invoke0 v0 v1 v2 v3
     move-result-object v1
     return-object v1
 
