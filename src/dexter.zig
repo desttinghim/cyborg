@@ -118,7 +118,7 @@ pub fn tokenize(alloc: std.mem.Allocator, file_map: []const u8) !Tokens {
         Register,
     };
 
-    var labels = std.StringHashMap(usize).init(alloc);
+    const labels = std.StringHashMap(usize).init(alloc);
     _ = labels;
     var tokenize_state: TokenizeState = .Whitespace;
     var token_indices = try std.ArrayListUnmanaged(u32).initCapacity(alloc, std.math.maxInt(u16));

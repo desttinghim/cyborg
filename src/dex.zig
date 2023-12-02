@@ -61,11 +61,11 @@ pub const Dex = struct {
     }
 
     const TypesList = std.StringArrayListUnmanaged(u32);
-    fn sortType(types: *TypesList) void {
+    fn sortTypes(types: *TypesList) void {
         const C = struct {
             indexes: [][]const u8,
             pub fn lessThan(self: @This(), a_index: usize, b_index: usize) bool {
-                return indexes[a_index] < indexes[b_index];
+                return self.indexes[a_index] < self.indexes[b_index];
             }
         };
         types.sort(C, .{ .indexes = types.values() });
@@ -112,15 +112,29 @@ pub const Dex = struct {
             .data_off = 0,
         };
 
-        var data_off_estimate: usize = 0;
-        data_off_estimate += 0x70; // header
+        var data_off_estimate: usize = 0x70; // header
+        header.string_ids_off = data_off_estimate;
+
         data_off_estimate += string_ids_size;
+        header.type_ids_off = data_off_estimate;
+
+        data_off_estimate += type_ids_size;
+        header.proto_ids_off = data_off_estimate;
+
         data_off_estimate += proto_ids_size;
+        header.field_ids_off = data_off_estimate;
+
         data_off_estimate += field_ids_size;
+        header.method_ids_off = data_off_estimate;
+
         data_off_estimate += method_ids_size;
+        header.class_defs_off = data_off_estimate;
+
         data_off_estimate += class_defs_size;
         data_off_estimate += call_site_ids_size;
         data_off_estimate += method_handles_size;
+
+        header.data_off = data_off_estimate;
 
         var data = try std.ArrayList(u8).initCapacity(allocator, data_off_estimate);
         errdefer data.deinit();
@@ -163,20 +177,18 @@ pub const Dex = struct {
         errdefer types.deinit();
         var type_iter = module.getTypeIterator();
         while (type_iter.next()) |t| {
-            const current_offset = data.items.len;
-
             const string = try t.getString(allocator);
             defer allocator.free(string);
             const string_index = string_data_offset.getIndex(string) orelse return error.MissingTypeString;
 
-            types.putNoClobber(t, string_offset);
+            types.putNoClobber(t, string_index);
         }
 
         sortTypes(&types);
 
         for (types.values(), 0..) |value, index| {
             const offset = 0x70 + string_ids_size * 4 + index * 4;
-            std.mem.writeInt(u32, data.items[offset..][0..4], vlaue, opt.endian);
+            std.mem.writeInt(u32, data.items[offset..][0..4], value, opt.endian);
         }
 
         // Construct type lists - needed for prototypes
@@ -191,7 +203,7 @@ pub const Dex = struct {
                     const type_idx = types.getIndex(param);
                     try data_writer.writeInt(u16, type_idx, opt.endian);
                 }
-                try type_lists_offsets.putNoClobber(method, offset);
+                try type_list_offsets.putNoClobber(method, offset);
             }
         }
 
@@ -201,9 +213,12 @@ pub const Dex = struct {
         {
             var method_iter = module.getMethodIterator();
             while (method_iter.next()) |method| {
-                const shorty = strings.getIndex();
+                const shorty = string_data_offset.getIndex();
+                _ = shorty;
                 const return_type = types.getIndex();
+                _ = return_type;
                 const parameters = type_list_offsets.getValue(method);
+                _ = parameters;
                 try proto_offsets.putNoClobber(method, {});
             }
         }
@@ -847,7 +862,7 @@ pub const AccessFlags = packed struct(u32) {
         var updated = access_flags;
         var buffer: [256]u8 = undefined;
         const lower_string = std.ascii.lowerString(&buffer, string);
-        var flag = std.meta.stringToEnum(FlagEnum, lower_string) orelse return error.NotAnAccessFlag;
+        const flag = std.meta.stringToEnum(FlagEnum, lower_string) orelse return error.NotAnAccessFlag;
 
         switch (flag) {
             .public => updated.Public = true,
@@ -911,7 +926,6 @@ const EncodedArray = struct {
 
 const EncodedAnnotation = struct {
     type_idx: u32,
-    size: u32,
     size: u32,
     elements: []AnnotationElement,
 };
@@ -1301,7 +1315,7 @@ const MapList = struct {
     pub fn read(header: HeaderItem, seek: anytype, reader: anytype, allocator: std.mem.Allocator) !MapList {
         try seek.seekTo(header.map_off);
         const size = try reader.readInt(u32, .little);
-        var list = try allocator.alloc(MapItem, size);
+        const list = try allocator.alloc(MapItem, size);
         errdefer allocator.free(list);
         for (list) |*map_item| {
             map_item.* = try MapItem.read(reader);
@@ -1545,7 +1559,7 @@ const TypeList = struct {
 
     pub fn read(reader: anytype, allocator: std.mem.Allocator) !TypeList {
         const size = try reader.readInt(u32, .little);
-        var list = try allocator.alloc(TypeItem, size);
+        const list = try allocator.alloc(TypeItem, size);
         errdefer allocator.free(list);
         for (list) |*type_item| {
             type_item.* = try TypeItem.read(reader);

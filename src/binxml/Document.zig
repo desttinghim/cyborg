@@ -84,7 +84,7 @@ const Builder = struct {
 };
 
 test Builder {
-    var builder = Builder.init(std.testing.allocator);
+    const builder = Builder.init(std.testing.allocator);
     _ = builder;
 }
 

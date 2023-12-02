@@ -135,10 +135,10 @@ pub fn readAlloc(seek: anytype, reader: anytype, starting_pos: usize, chunk_head
             .XmlEndNamespace,
             => try nodes.append(alloc, try XMLTree.Node.read(reader, resource_header)),
             .XmlStartElement => {
-                var node_id = nodes.items.len;
-                var node = try XMLTree.Node.read(reader, resource_header);
+                const node_id = nodes.items.len;
+                const node = try XMLTree.Node.read(reader, resource_header);
                 try nodes.append(alloc, node);
-                var attribute = node.extended.Attribute;
+                const attribute = node.extended.Attribute;
                 if (attribute.count > 0) {
                     var i: usize = 0;
                     while (i < attribute.count) : (i += 1) {

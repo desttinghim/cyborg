@@ -84,13 +84,13 @@ pub fn insert(self: *StringPool, allocator: std.mem.Allocator, string: []const u
     if (self.data != .Utf8) return error.WrongEncoding;
 
     for (self.data.Utf8.slices.items, 0..) |span, i| {
-        var str = self.data.Utf8.pool.items[span.start..span.end];
+        const str = self.data.Utf8.pool.items[span.start..span.end];
         if (std.mem.eql(u8, str, string)) {
             return Ref{ .index = @as(u32, @intCast(i)) };
         }
     }
 
-    var span = .{
+    const span = .{
         .start = self.data.Utf8.pool.items.len,
         .end = self.data.Utf8.pool.items.len + string.len,
     };
@@ -181,9 +181,9 @@ pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: Resou
             // Construct slices
             var string_pool = try ArrayList(Span).initCapacity(alloc, header.string_count);
             for (string_offset) |offset| {
-                var buf_index = offset;
-                var len: usize = string_buf.items[buf_index];
-                var add_index: usize = 1;
+                const buf_index = offset;
+                const len: usize = string_buf.items[buf_index];
+                const add_index: usize = 1;
                 string_pool.appendAssumeCapacity(.{
                     .start = buf_index + add_index,
                     .end = buf_index + add_index + len,
@@ -216,7 +216,7 @@ pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, chunk_header: Resou
             // Construct slices
             var string_pool = try ArrayList(Span).initCapacity(alloc, header.string_count);
             for (string_offset) |offset| {
-                var buf_index = offset / 2;
+                const buf_index = offset / 2;
                 var len: usize = string_buf.items[buf_index];
                 var add_index: usize = 1;
                 if (len > 32767) {
@@ -252,8 +252,8 @@ pub fn read(seek: anytype, reader: anytype, header: Header, string_buf: []u16, s
     for (string_pool) |*string| {
         const offset = try reader.readInt(u32, .little);
         std.debug.assert(offset % 2 == 0);
-        var index = offset / 2;
-        var len: usize = string_buf[index];
+        const index = offset / 2;
+        const len: usize = string_buf[index];
         if (len > 32767) {
             len = (len & 0b0111_1111) << 16;
             index += 1;

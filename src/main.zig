@@ -221,6 +221,7 @@ pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
         _ = try stdout.write(header.filename);
         _ = try stdout.write("\n");
     }
+    // TODO: write out more info on the zip file
 }
 
 pub fn signZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
@@ -318,7 +319,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
         var hash = Sha256.init(.{});
 
         var size_buf: [4]u8 = undefined;
-        var size = @as(u32, @intCast(chunk.len));
+        const size = @as(u32, @intCast(chunk.len));
         std.mem.writeInt(u32, &size_buf, size, .little);
 
         hash.update(&.{0xa5}); // Magic value byte
@@ -368,6 +369,8 @@ pub fn alignZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fil
         _ = try stdout.write(header.filename);
         _ = try stdout.write("\n");
     }
+
+    // TODO: align zip items
 }
 
 pub fn readBinXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
@@ -380,7 +383,7 @@ pub fn readBinXml(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.F
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    var document = try binxml.Document.readAlloc(file.seekableStream(), file.reader(), arena_alloc);
+    const document = try binxml.Document.readAlloc(file.seekableStream(), file.reader(), arena_alloc);
 
     try printInfo(document, stdout);
 }
@@ -403,7 +406,7 @@ pub fn readApk(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     defer alloc.free(manifest_string);
 
     var manifest_stream = std.io.FixedBufferStream([]const u8){ .pos = 0, .buffer = manifest_string };
-    var document = try binxml.Document.readAlloc(manifest_stream.seekableStream(), manifest_stream.reader(), alloc);
+    const document = try binxml.Document.readAlloc(manifest_stream.seekableStream(), manifest_stream.reader(), alloc);
 
     try printInfo(document, stdout);
 
@@ -414,7 +417,7 @@ pub fn readApk(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     defer alloc.free(resource_string);
 
     var resource_stream = std.io.FixedBufferStream([]const u8){ .pos = 0, .buffer = resource_string };
-    var resource_document = try binxml.Document.readAlloc(resource_stream.seekableStream(), resource_stream.reader(), alloc);
+    const resource_document = try binxml.Document.readAlloc(resource_stream.seekableStream(), resource_stream.reader(), alloc);
 
     try printInfo(resource_document, stdout);
 }

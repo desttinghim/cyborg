@@ -1,5 +1,4 @@
 const std = @import("std");
-// const libxml2 = @import("dep/zig-libxml2/libxml2.zig");
 
 pub fn build(b: *std.Build) !void {
     const target = b.standardTargetOptions(.{});
@@ -9,14 +8,6 @@ pub fn build(b: *std.Build) !void {
 
     const archive_mod = zig_archive.module("archive");
 
-    // const xml = try libxml2.create(b, target, optimize, .{
-    //     .iconv = false,
-    //     .lzma = false,
-    //     .zlib = false,
-    // });
-    // _ = xml;
-
-    // TODO: figure out linking/includes for c dependencies with package manager
     const cyborg_module = b.addModule("cyborg", .{
         .source_file = .{ .path = "src/main.zig" },
         .dependencies = &.{.{
@@ -44,7 +35,8 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
     exe.addModule("archive", zig_archive.module("archive"));
-    // xml.link(exe);
+
+    b.installArtifact(exe);
 
     const dexter_exe = b.addExecutable(.{
         .name = "dexter",
@@ -53,7 +45,6 @@ pub fn build(b: *std.Build) !void {
         .optimize = optimize,
     });
 
-    // b.installArtifact(exe);
     b.installArtifact(dexter_exe);
 
     const run_cmd = b.addRunArtifact(exe);

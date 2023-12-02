@@ -80,7 +80,7 @@ pub const Header = struct {
 };
 
 pub fn readAlloc(seek: anytype, reader: anytype, pos: usize, alloc: std.mem.Allocator) !Chunk {
-    var header = Header{
+    const header = Header{
         .type = @as(Type, @enumFromInt(try reader.readInt(u16, .little))),
         .header_size = try reader.readInt(u16, .little),
         .size = try reader.readInt(u32, .little),

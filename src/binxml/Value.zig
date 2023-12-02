@@ -134,9 +134,9 @@ pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
         .Float => .{ .Float = @as(f32, @bitCast(try reader.readInt(u32, .little))) },
         .Dimension => .{ .Dimension = dimension: {
             const description = try reader.readByte();
-            var unit = @as(DimensionUnit, @enumFromInt(@as(u4, @truncate(description))));
-            var radix = @as(Radix, @enumFromInt(@as(u4, @truncate(description >> 4))));
-            var value = try reader.readInt(i24, .little);
+            const unit = @as(DimensionUnit, @enumFromInt(@as(u4, @truncate(description))));
+            const radix = @as(Radix, @enumFromInt(@as(u4, @truncate(description >> 4))));
+            const value = try reader.readInt(i24, .little);
             break :dimension .{
                 .unit = unit,
                 .radix = radix,
@@ -145,9 +145,9 @@ pub fn read(reader: anytype, string_pool: ?*StringPool) !Value {
         } },
         .Fraction => .{ .Fraction = fraction: {
             const description = try reader.readByte();
-            var unit = @as(FractionUnit, @enumFromInt(@as(u4, @truncate(description))));
-            var radix = @as(Radix, @enumFromInt(@as(u4, @truncate(description >> 4))));
-            var value = try reader.readInt(i24, .little);
+            const unit = @as(FractionUnit, @enumFromInt(@as(u4, @truncate(description))));
+            const radix = @as(Radix, @enumFromInt(@as(u4, @truncate(description >> 4))));
+            const value = try reader.readInt(i24, .little);
             break :fraction .{
                 .unit = unit,
                 .radix = radix,

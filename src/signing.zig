@@ -182,7 +182,7 @@ pub fn update_eocd_directory_offset(signing: Signing, mmapped_file: []u8) void {
 /// # Return
 /// Returns an instance of the Signing struct
 pub fn get_offsets(alloc: std.mem.Allocator, mmapped_file: []const u8) !Signing {
-    var fixed_buffer_stream = std.io.FixedBufferStream([]const u8){ .buffer = mmapped_file, .pos = 0 };
+    const fixed_buffer_stream = std.io.FixedBufferStream([]const u8){ .buffer = mmapped_file, .pos = 0 };
     var stream_source = std.io.StreamSource{ .const_buffer = fixed_buffer_stream };
 
     // TODO: change zig-archive to allow operating without a buffer
@@ -345,7 +345,7 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
                 // const hash = sha.finalResult();
                 const modulus_len = 256;
                 std.debug.print("PSSSignature: {}\n", .{std.fmt.fmtSliceHexUpper(signed_data_sig.slice)});
-                var sig = rsa.PSSSignature.fromBytes(modulus_len, signed_data_sig.slice);
+                const sig = rsa.PSSSignature.fromBytes(modulus_len, signed_data_sig.slice);
 
                 const verified = try rsa.PSSSignature.verify(modulus_len, sig, signed_data_block.slice, public_key, Sha256);
                 _ = verified;
