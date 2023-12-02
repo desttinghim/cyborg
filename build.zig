@@ -74,3 +74,50 @@ pub fn build(b: *std.Build) !void {
     const run_dexter_step = b.step("run-dexter", "Run the app");
     run_dexter_step.dependOn(&run_dexter_cmd.step);
 }
+
+pub const ApplicationOptions = struct {
+    api_level: []const u8,
+};
+
+pub fn addApplication() AndroidApplication {}
+
+/// Represents an Android Application, which is a collection of components
+/// that all represent different entry points
+pub const AndroidApplication = struct {
+    components: std.ArrayListUnmanaged(),
+
+    pub const Component = union(enum) {
+        activity: Activity,
+        service: Service,
+        broadcast_receiver: BroadcastReceiver,
+        content_provider: ContentProvider,
+    };
+
+    /// Application entry point for providing a graphical user interface
+    pub const Activity = struct {
+        kind: ActivityKind,
+
+        pub const ActivityKind = union(enum) {
+            dex: std.Build.FileSource,
+            native: std.Build.FileSource,
+        };
+    };
+    /// Application entry point for long-running operations
+    pub const Service = struct {
+        dex: std.Build.FileSource,
+    };
+    /// Application entry point for responding to system events
+    pub const BroadcastReceiver = struct {
+        dex: std.Build.FileSource,
+    };
+    /// Application entry point for mapping data to URIs
+    pub const ContentProvider = struct {
+        dex: std.Build.FileSource,
+    };
+    /// Files depended on by the application - includes application icons
+    pub const Resource = struct {
+        pub const ResourceKind = union(enum) {
+            drawable: std.Build.FileSource,
+        };
+    };
+};

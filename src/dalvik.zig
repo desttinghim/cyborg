@@ -2,8 +2,8 @@ pub const Module = struct {
     arena: std.heap.ArenaAllocator,
     strings: std.StringHashMapUnmanaged(void),
     types: std.StringHashMapUnmanaged(TypeValue),
-    fields: std.StringHashMapUnmanaged(void),
-    methods: std.StringHashMapUnmanaged(void),
+    fields: std.AutoHashMapUnmanaged(*const Field, void),
+    methods: std.AutoHashMapUnmanaged(*const Method, void),
     classes: std.ArrayListUnmanaged(Class),
 
     pub fn init(alloc: std.mem.Allocator) Module {
@@ -38,7 +38,7 @@ pub const Module = struct {
         try module.addType(field.type);
         try module.addType(class);
         try module.addString(field.name);
-        try module.fields.put(alloc, field.name, {});
+        try module.fields.put(alloc, field, {});
     }
 
     pub fn addMethod(module: *Module, class: TypeValue, method: *const Method) !void {
@@ -50,7 +50,7 @@ pub const Module = struct {
         }
         try module.addString(method.shorty);
         try module.addString(method.name);
-        try module.fields.put(alloc, method.name, {});
+        try module.methods.put(alloc, method, {});
     }
 
     pub const Instruction = union(Tag) {
@@ -406,12 +406,42 @@ pub const Module = struct {
         }
     };
 
+    pub fn getStringCount(module: *const Module) usize {
+        return module.strings.count();
+    }
+    pub fn getTypeCount(module: *const Module) usize {
+        return module.types.count();
+    }
+    pub fn getFieldCount(module: *const Module) usize {
+        return module.fields.count();
+    }
+    pub fn getMethodCount(module: *const Module) usize {
+        return module.methods.count();
+    }
+    pub fn getClassCount(module: *const Module) usize {
+        return module.classes.items.len;
+    }
+    pub fn getCallSiteCount(module: *const Module) usize {
+        // TODO
+        _ = module;
+        return 0;
+    }
+    pub fn getMethodHandleCount(module: *const Module) usize {
+        // TODO
+        _ = module;
+        return 0;
+    }
+
     pub fn getStringIterator(module: *const Module) std.StringHashMap(void).KeyIterator {
         return module.strings.keyIterator();
     }
 
-    pub fn getTypeIterator(module: *const Module) std.StringHashMap(TypeValue).KeyIterator {
-        return module.types.keyIterator();
+    pub fn getTypeIterator(module: *const Module) std.StringHashMap(TypeValue).ValueIterator {
+        return module.types.valueIterator();
+    }
+
+    pub fn getMethodIterator(module: *const Module) std.AutoHashMap(*const Method, void).KeyIterator {
+        return module.methods.keyIterator();
     }
 };
 
