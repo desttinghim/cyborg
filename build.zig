@@ -66,6 +66,19 @@ pub fn build(b: *std.Build) !void {
     run_dexter_step.dependOn(&run_dexter_cmd.step);
 }
 
+// TODO:
+// pub fn addApk() { }
+
+// pub const ApkStep = struct {
+//     files: std.ArrayList(std.Build.FileSource),
+//
+//
+//     const ApkFile = struct {
+//         compress: bool,
+//         align: ?enum { align4k } = null,
+//     };
+// };
+
 pub const ApplicationOptions = struct {
     api_level: []const u8,
 };

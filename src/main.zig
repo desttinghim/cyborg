@@ -43,16 +43,17 @@ const Subcommand = enum {
 
 pub fn main() !void {
     const stdout = std.io.getStdOut();
-    run(stdout) catch |err| {
-        switch (err) {
-            else => |e| {
-                _ = try stdout.write("Error! ");
-                _ = try stdout.write(@errorName(e));
-                _ = try stdout.write("\n");
-            },
-        }
-        _ = try stdout.write(usage);
-    };
+    try run(stdout);
+    // catch |err| {
+    //     switch (err) {
+    //         else => |e| {
+    //             _ = try stdout.write("Error! ");
+    //             _ = try stdout.write(@errorName(e));
+    //             _ = try stdout.write("\n");
+    //         },
+    //     }
+    //     _ = try stdout.write(usage);
+    // };
 }
 
 pub fn run(stdout: std.fs.File) !void {
@@ -289,7 +290,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
             });
         }
 
-        try stdout.writer().print("Public Key: {}\n", .{
+        try stdout.writer().print("Public Key: {any}\n", .{
             signer.public_key,
         });
     }

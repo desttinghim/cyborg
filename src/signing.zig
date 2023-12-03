@@ -24,7 +24,7 @@ pub const SigningEntry = union(Tag) {
         alloc: std.mem.Allocator,
         signed_data: SignedData,
         signatures: std.ArrayListUnmanaged(Signature),
-        public_key: std.crypto.Certificate.rsa.PublicKey,
+        public_key: []const u8,
 
         pub fn deinit(signer: *Signer) void {
             signer.signed_data.deinit();
@@ -304,61 +304,110 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
 
         const signature_sequence = try get_length_prefixed_slice(signed_data_block.remaining orelse return error.UnexpectedEndOfStream);
         const public_key_chunk = try get_length_prefixed_slice(signature_sequence.remaining orelse return error.UnexpectedEndOfStream);
+
+        std.log.info("{}", .{std.fmt.fmtSliceHexUpper(public_key_chunk.slice)});
+
+        var certi = std.crypto.Certificate{
+            .buffer = public_key_chunk.slice,
+            .index = 0,
+        };
+
         const Element = std.crypto.Certificate.der.Element;
         const subject_pk_info = try Element.parse(public_key_chunk.slice, 0);
         std.debug.assert(subject_pk_info.identifier.tag == .sequence);
 
-        const alg_id = try Element.parse(public_key_chunk.slice, subject_pk_info.slice.start);
-        std.debug.assert(alg_id.identifier.tag == .sequence);
+        const pk_alg_elem = try Element.parse(public_key_chunk.slice, subject_pk_info.slice.start);
+        std.debug.assert(pk_alg_elem.identifier.tag == .sequence);
 
-        const oid = try Element.parse(public_key_chunk.slice, alg_id.slice.start);
-        std.debug.assert(oid.identifier.tag == .object_identifier);
-        const alg = try std.crypto.Certificate.parseAlgorithmCategory(public_key_chunk.slice, oid);
-        _ = alg;
+        const pk_alg_tag = try Element.parse(public_key_chunk.slice, pk_alg_elem.slice.start);
+        std.debug.assert(pk_alg_tag.identifier.tag == .object_identifier);
+        const alg = try std.crypto.Certificate.parseAlgorithmCategory(public_key_chunk.slice, pk_alg_tag);
 
-        const null_val = try Element.parse(public_key_chunk.slice, oid.slice.end);
+        const pub_key_algo: std.crypto.Certificate.Parsed.PubKeyAlgo = switch (alg) {
+            .X9_62_id_ecPublicKey => curve: {
+                const params_elem = try Element.parse(public_key_chunk.slice, pk_alg_tag.slice.end);
+                std.log.info("{} {}", .{ alg, params_elem });
+                const named_curve = try std.crypto.Certificate.parseNamedCurve(public_key_chunk.slice, params_elem);
+                std.log.info("{}", .{named_curve});
+                break :curve .{ .X9_62_id_ecPublicKey = named_curve };
+            },
+            .rsaEncryption => .{ .rsaEncryption = {} },
+        };
 
-        const subject_pk = try Element.parse(public_key_chunk.slice, null_val.slice.end);
-        const unused_bits = public_key_chunk.slice[subject_pk.slice.start];
-        _ = unused_bits;
-        const subject_pk_bitstring = public_key_chunk.slice[subject_pk.slice.start + 1 ..];
-
-        const pk_components = try std.crypto.Certificate.rsa.PublicKey.parseDer(subject_pk_bitstring);
-        const public_key = try std.crypto.Certificate.rsa.PublicKey.fromBytes(pk_components.exponent, pk_components.modulus);
+        const pub_key_elem = try Element.parse(public_key_chunk.slice, pk_alg_elem.slice.end);
+        std.log.info("{}\n{}\n", .{
+            pub_key_elem,
+            std.fmt.fmtSliceHexUpper(public_key_chunk.slice[pub_key_elem.slice.start..pub_key_elem.slice.end]),
+        });
+        const subject_pk_bitstring = try certi.parseBitString(pub_key_elem);
 
         // Parse signature
-        {
-            var signature_iter = try get_length_prefixed_slice(signature_sequence.slice);
-            var signature_opt: ?[]const u8 = signature_iter.slice;
-            while (signature_opt) |signature| {
-                const signature_algorithm_id = std.mem.readInt(u32, signature[0..4], .little);
+        switch (pub_key_algo) {
+            .X9_62_id_ecPublicKey => {
+                var signature_iter = try get_length_prefixed_slice(signature_sequence.slice);
+                var signature_opt: ?[]const u8 = signature_iter.slice;
+                while (signature_opt) |signature| {
+                    const signature_algorithm_id = std.mem.readInt(u32, signature[0..4], .little);
 
-                const signed_data_sig = get_length_prefixed_slice(signature[4..]) catch return error.UnexpectedEndOfStream;
+                    const signed_data_sig = get_length_prefixed_slice(signature[4..]) catch return error.UnexpectedEndOfStream;
 
-                std.debug.print("signature algorithm id {x}\n", .{signature_algorithm_id});
+                    std.debug.print("signature algorithm id {x}\n", .{signature_algorithm_id});
 
-                const rsa = std.crypto.Certificate.rsa;
-                const Sha256 = std.crypto.hash.sha2.Sha256;
-                // var sha = Sha256.init(.{});
+                    std.debug.print("ECDSA Signature: {}\n", .{std.fmt.fmtSliceHexUpper(signed_data_sig.slice)});
 
-                // sha.update(signed_data_block.slice);
-                // const hash = sha.finalResult();
-                const modulus_len = 256;
-                std.debug.print("PSSSignature: {}\n", .{std.fmt.fmtSliceHexUpper(signed_data_sig.slice)});
-                const sig = rsa.PSSSignature.fromBytes(modulus_len, signed_data_sig.slice);
+                    switch (pub_key_algo.X9_62_id_ecPublicKey) {
+                        .secp521r1 => return error.Unsupported,
+                        inline else => |named_curve| {
+                            const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(named_curve.Curve(), std.crypto.hash.sha2.Sha256);
+                            const sig = try Ecdsa.Signature.fromDer(signed_data_sig.slice);
+                            const pub_key = try Ecdsa.PublicKey.fromSec1(public_key_chunk.slice[subject_pk_bitstring.start..subject_pk_bitstring.end]);
+                            const verified = try sig.verify(signed_data_block.slice, pub_key);
+                            _ = verified;
+                        },
+                    }
 
-                const verified = try rsa.PSSSignature.verify(modulus_len, sig, signed_data_block.slice, public_key, Sha256);
-                _ = verified;
+                    try signatures.append(alloc, .{
+                        .algorithm = @as(SigningEntry.Signer.Algorithm, @enumFromInt(signature_algorithm_id)),
+                        .signature = signed_data_sig.slice,
+                    });
 
-                try signatures.append(alloc, .{
-                    .algorithm = @as(SigningEntry.Signer.Algorithm, @enumFromInt(signature_algorithm_id)),
-                    .signature = signed_data_sig.slice,
-                });
+                    // End of loop
+                    signature_iter = get_length_prefixed_slice(signature_iter.remaining orelse break) catch break;
+                    signature_opt = signature_iter.slice;
+                }
+            },
+            .rsaEncryption => {
+                var signature_iter = try get_length_prefixed_slice(signature_sequence.slice);
+                var signature_opt: ?[]const u8 = signature_iter.slice;
+                while (signature_opt) |signature| {
+                    const signature_algorithm_id = std.mem.readInt(u32, signature[0..4], .little);
 
-                // End of loop
-                signature_iter = get_length_prefixed_slice(signature_iter.remaining orelse break) catch break;
-                signature_opt = signature_iter.slice;
-            }
+                    const signed_data_sig = get_length_prefixed_slice(signature[4..]) catch return error.UnexpectedEndOfStream;
+
+                    std.debug.print("signature algorithm id {x}\n", .{signature_algorithm_id});
+
+                    const pk_components = try std.crypto.Certificate.rsa.PublicKey.parseDer(public_key_chunk.slice[subject_pk_bitstring.start..subject_pk_bitstring.end]);
+                    const public_key = try std.crypto.Certificate.rsa.PublicKey.fromBytes(pk_components.exponent, pk_components.modulus);
+
+                    const rsa = std.crypto.Certificate.rsa;
+                    const Sha256 = std.crypto.hash.sha2.Sha256;
+                    const modulus_len = 256;
+                    std.debug.print("PSSSignature: {}\n", .{std.fmt.fmtSliceHexUpper(signed_data_sig.slice)});
+                    const sig = rsa.PSSSignature.fromBytes(modulus_len, signed_data_sig.slice);
+
+                    const verified = try rsa.PSSSignature.verify(modulus_len, sig, signed_data_block.slice, public_key, Sha256);
+                    _ = verified;
+
+                    try signatures.append(alloc, .{
+                        .algorithm = @as(SigningEntry.Signer.Algorithm, @enumFromInt(signature_algorithm_id)),
+                        .signature = signed_data_sig.slice,
+                    });
+
+                    // End of loop
+                    signature_iter = get_length_prefixed_slice(signature_iter.remaining orelse break) catch break;
+                    signature_opt = signature_iter.slice;
+                }
+            },
         }
 
         // Parse signed data
@@ -402,10 +451,18 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
                 x509_chunk_opt = x509_iter.slice;
             }
 
-            const attribute_sequence = try get_length_prefixed_slice(x509_sequence.remaining.?);
-
             var attributes = std.ArrayListUnmanaged(SigningEntry.Signer.SignedData.Attribute){};
             errdefer attributes.clearAndFree(alloc);
+
+            const attribute_sequence = get_length_prefixed_slice(x509_sequence.remaining orelse return error.UnexpectedEndOfStream) catch |e| {
+                std.debug.assert(e == error.SliceTooSmall);
+                break :signed_data .{
+                    .alloc = alloc,
+                    .digests = digests,
+                    .certificates = x509_list,
+                    .attributes = attributes,
+                };
+            };
 
             attribute: {
                 var attribute_iter = get_length_prefixed_slice(attribute_sequence.slice) catch break :attribute;
@@ -432,16 +489,19 @@ pub fn parse_v2(alloc: std.mem.Allocator, entry_slice: []const u8) !SigningEntry
 
         {
             const sdpk = signed_data.certificates.items[0].pubKey();
-            std.debug.assert(std.mem.eql(u8, subject_pk_bitstring, sdpk));
+            std.debug.assert(std.mem.eql(u8, public_key_chunk.slice[subject_pk_bitstring.start..subject_pk_bitstring.end], sdpk));
         }
 
-        // TODO: make sure signed data and signatures have the same list of algorithms
+        // Ensures signed data and signatures have the same list of algorithms
+        for (signatures.items, signed_data.digests.items) |signature, digest| {
+            if (signature.algorithm != digest.algorithm) return error.MismatchedAlgorithms;
+        }
 
         try signers.append(.{
             .alloc = alloc,
             .signed_data = signed_data,
             .signatures = signatures,
-            .public_key = public_key,
+            .public_key = public_key_chunk.slice[subject_pk_bitstring.start..subject_pk_bitstring.end],
         });
 
         // End of loop
