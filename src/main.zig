@@ -232,14 +232,16 @@ pub fn signZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    var stream_source = std.io.StreamSource{ .file = file };
+    // Read zip archive into memory
+    const unsigned_apk = try file.reader().readAllAlloc(alloc, std.math.maxInt(u64));
+
+    const fbs = std.io.fixedBufferStream(unsigned_apk);
+    var stream_source = .{ .buffer = fbs };
     var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
 
     try archive_reader.load();
 
     // TODO: parse signing options
-
-    // TODO: Read zip archive into memory
 
     // TODO: Sign with specified options
 
@@ -257,7 +259,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
 
     const signing_block = try signing.get_offsets(alloc, apk_map);
 
-    const v2_block = signing_block.locate_entry(signing.SigningEntry.Tag.V2) catch return error.MissingV2;
+    const v2_block = try signing_block.locate_entry(signing.SigningEntry.Tag.V2) orelse return error.MissingV2;
 
     // TODO: verify signatures before parsing signed data
     const signing_entry = try signing.parse_v2(alloc, v2_block);
