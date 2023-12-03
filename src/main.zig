@@ -249,6 +249,7 @@ pub fn signZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 }
 
 pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+    _ = stdout;
     const filepath = try std.fs.realpathAlloc(alloc, args[2]);
     const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
@@ -257,102 +258,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     const apk_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, std.os.MAP.PRIVATE, file.handle, 0);
     defer std.os.munmap(apk_map);
 
-    const signing_block = try signing.get_offsets(alloc, apk_map);
-
-    const v2_block = try signing_block.locate_entry(signing.SigningEntry.Tag.V2) orelse return error.MissingV2;
-
-    // TODO: verify signatures before parsing signed data
-    const signing_entry = try signing.parse_v2(alloc, v2_block);
-    for (signing_entry.V2.items) |signer| {
-        try stdout.writer().print(
-            \\
-            \\Signed Data:
-            \\    digests:      {}
-            \\    certificates: {}
-            \\    attributes:   {}
-            \\
-        , .{
-            signer.signed_data.digests.items.len,
-            signer.signed_data.certificates.items.len,
-            signer.signed_data.attributes.items.len,
-        });
-
-        for (signer.signed_data.digests.items) |digest| {
-            try stdout.writer().print("\tLength {}\tAlgorithm {}\n", .{ digest.data.len, digest.algorithm });
-            try stdout.writer().print("\t{}\n", .{std.fmt.fmtSliceHexUpper(digest.data)});
-        }
-
-        try stdout.writer().print("Signatures: {} items\n", .{
-            signer.signatures.items.len,
-        });
-        for (signer.signatures.items) |signature| {
-            try stdout.writer().print("\tAlgorithm: {}\n\tsignature length: {}\n", .{
-                signature.algorithm,
-                signature.signature.len,
-            });
-        }
-
-        try stdout.writer().print("Public Key: {any}\n", .{
-            signer.public_key,
-        });
-    }
-
-    const signing_block_offset = signing_block.signing_block_offset;
-    const directory_offset = signing_block.central_directory_offset;
-    const eocd_offset = signing_block.end_of_central_directory_offset; // TODO: get the end of central directory from zig-archive
-
-    // The APK signing algorithm treats the directory offset in the EOCD record
-    // as a point to the beginning of the signing block offset. This is necessary
-    // because inserting the signing block can move the beginning of the central
-    // directory record, which would make the signing block invalid.
-    signing_block.update_eocd_directory_offset(apk_map);
-
-    const chunks = try signing.splitAPK(alloc, apk_map, signing_block_offset, directory_offset, eocd_offset);
-    try stdout.writer().print("Chunk total: {}\n", .{chunks.len});
-
-    // TODO: use the correct algorithm instead of assuming Sha256
-    const Sha256 = std.crypto.hash.sha2.Sha256;
-
-    // Allocate enough memory to store all the digests
-    const digest_mem = try alloc.alloc(u8, Sha256.digest_length * chunks.len);
-    defer alloc.free(digest_mem);
-
-    // Loop over every chunk and compute its digest
-    for (chunks, 0..) |chunk, i| {
-        var hash = Sha256.init(.{});
-
-        var size_buf: [4]u8 = undefined;
-        const size = @as(u32, @intCast(chunk.len));
-        std.mem.writeInt(u32, &size_buf, size, .little);
-
-        hash.update(&.{0xa5}); // Magic value byte
-        hash.update(&size_buf); // Size in bytes, le u32
-        hash.update(chunk); // Chunk contents
-
-        hash.final(digest_mem[i * Sha256.digest_length ..][0..Sha256.digest_length]);
-    }
-
-    // Compute the digest over all chunks
-    var hash = Sha256.init(.{});
-
-    var size_buf: [4]u8 = undefined;
-    std.mem.writeInt(u32, &size_buf, @as(u32, @intCast(chunks.len)), .little);
-
-    hash.update(&.{0x5a}); // Magic value byte for final digest
-    hash.update(&size_buf);
-    hash.update(digest_mem);
-    const final_digest = hash.finalResult();
-
-    // Compare the final digest with the one stored in the signing block
-    const digest_is_equal = std.mem.eql(u8, signing_entry.V2.items[0].signed_data.digests.items[0].data, &final_digest);
-    try stdout.writer().print("{}\n", .{std.fmt.fmtSliceHexUpper(&final_digest)});
-    if (digest_is_equal) {
-        try stdout.writer().print("Digest Equal\n", .{});
-    } else {
-        try stdout.writer().print("ERROR - Digest Value Differs!\n", .{});
-    }
-
-    // TODO: Verify the SubjectPublicKeyInfo of the certificate is identical to the public key
+    try signing.verify(alloc, apk_map);
 }
 
 pub fn alignZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {

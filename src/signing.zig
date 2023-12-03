@@ -96,7 +96,7 @@ pub const SigningEntry = union(Tag) {
     };
 };
 
-pub fn verify(ally: std.mem.Allocator, apk_contents: []const u8) void {
+pub fn verify(ally: std.mem.Allocator, apk_contents: []u8) !void {
     const signing_block = try get_offsets(ally, apk_contents);
 
     // TODO: Implement V4
@@ -115,85 +115,114 @@ pub fn verify(ally: std.mem.Allocator, apk_contents: []const u8) void {
     // }
 
     if (try signing_block.locate_entry(.V2)) |v2_block| {
-        try verify_v2(ally, apk_contents, v2_block, default_algorithm_try_order);
+        try verify_v2(signing_block, ally, v2_block, &default_algorithm_try_order);
         return;
     }
 }
 
-/// Splits an APK into chunks for signing/verifying.
-pub fn splitAPK(ally: std.mem.Allocator, mmapped_file: []const u8, signing_pos: usize, central_directory_pos: usize, end_of_cd_pos: usize) ![][]const u8 {
-    const spos = signing_pos;
-    const cdpos = central_directory_pos;
-    const section1 = mmapped_file[0..spos]; // -8 to account for second signing block size field
-    // const section2 = mmapped_file[signing_pos..central_directory_pos];
-    const section3 = mmapped_file[cdpos..end_of_cd_pos];
-    const section4 = mmapped_file[end_of_cd_pos..];
+// pub fn splitAPK(ally: std.mem.Allocator, apk_contents: []const u8, signing_pos: usize, central_directory_pos: usize, end_of_cd_pos: usize) ![][]const u8 {  }
 
-    std.debug.assert(section1.len != 0);
-    // std.debug.assert(section2.len != 0);
-    std.debug.assert(section3.len != 0);
-    std.debug.assert(section4.len != 0);
+const SigningOffsets = struct {
+    signing_block_offset: u64,
+    central_directory_offset: u64,
+    end_of_central_directory_offset: u64,
 
-    const MB = 1024 * 1024; // 2 << 20;
-    const section1_count = try std.math.divCeil(usize, section1.len, MB);
-    // const section2_count = std.math.divCeil(usize, section2.len, MB);
-    const section3_count = try std.math.divCeil(usize, section3.len, MB);
-    const section4_count = try std.math.divCeil(usize, section4.len, MB);
+    signing_block: []const u8,
+    apk_contents: []u8,
 
-    const total_count = section1_count + section3_count + section4_count;
-
-    var chunks = std.ArrayListUnmanaged([]const u8){};
-    try chunks.ensureTotalCapacity(ally, total_count);
-
-    // Split ZIP entries into 1 mb chunks
-    {
-        var count: usize = 0;
-        while (count < section1_count) : (count += 1) {
-            const end = @min((count + 1) * MB, section1.len);
-            const chunk = section1[count * MB .. end];
-            std.debug.assert(chunk.len <= MB);
-            chunks.appendAssumeCapacity(chunk);
-        }
-    }
-    // Split Central Directory into 1 mb chunks
-    {
-        var count: usize = 0;
-        while (count < section3_count) : (count += 1) {
-            const end = @min((count + 1) * MB, section3.len);
-            const chunk = section3[count * MB .. end];
-            std.debug.assert(chunk.len <= MB);
-            chunks.appendAssumeCapacity(chunk);
-        }
-    }
-    // Split End of Central Directory into 1 mb chunks
-    {
-        var count: usize = 0;
-        while (count < section4_count) : (count += 1) {
-            const end = @min((count + 1) * MB, section4.len);
-            const chunk = section4[count * MB .. end];
-            std.debug.assert(chunk.len <= MB);
-            chunks.appendAssumeCapacity(chunk);
-        }
+    /// Updates the EOCD directory offset to point to start of signing block
+    pub fn update_eocd_directory_offset(signing: SigningOffsets) void {
+        std.debug.assert(signing.signing_block_offset < std.math.maxInt(u32));
+        const pos = @as(u32, @intCast(signing.signing_block_offset));
+        const eocd = signing.apk_contents[signing.end_of_central_directory_offset..];
+        std.mem.writeInt(u32, eocd[16..20], pos, .little);
     }
 
-    return chunks.toOwnedSlice(ally);
-}
+    /// Within the signing block, finds the entry that corresponds to a given
+    /// signing scheme version.
+    ///
+    /// # Parameters
+    /// - signing_block: A slice of bytes corresponding to the APK signing block
+    /// - tag: The SigningEntry.Tag value for the desired entry
+    ///
+    /// # Return
+    /// Returns a slice corresponding to the signing entry within the signing block
+    pub fn locate_entry(signing: SigningOffsets, tag: SigningEntry.Tag) !?[]const u8 {
+        var index: usize = 8; // skip the signing block size
+        while (index < signing.signing_block.len) {
+            const size = std.mem.readInt(u64, signing.signing_block[index..][0..8], .little);
+            if (size > signing.signing_block.len) return error.SigningEntryLengthOutOfBounds;
+            const entry_tag = @as(SigningEntry.Tag, @enumFromInt(std.mem.readInt(u32, signing.signing_block[index + 8 ..][0..4], .little)));
 
-const Signing = @This();
+            if (entry_tag == tag)
+                return signing.signing_block[index + 12 ..][0 .. size - 4];
 
-signing_block_offset: u64,
-central_directory_offset: u64,
-end_of_central_directory_offset: u64,
+            index += size + 8;
+        }
+        return null;
+    }
 
-signing_block: []const u8,
+    /// Splits an APK into chunks for signing/verifying.
+    pub fn splitAPK(offsets: SigningOffsets, ally: std.mem.Allocator) ![][]const u8 {
+        const apk_contents = offsets.apk_contents;
+        const spos = offsets.signing_block_offset;
+        const cdpos = offsets.central_directory_offset;
+        const end_of_cd_pos = offsets.end_of_central_directory_offset;
+        const section1 = apk_contents[0..spos]; // -8 to account for second signing block size field
+        // const section2 = apk_contents[signing_pos..central_directory_pos];
+        const section3 = apk_contents[cdpos..end_of_cd_pos];
+        const section4 = apk_contents[end_of_cd_pos..];
 
-/// Updates the EOCD directory offset to point to start of signing block
-pub fn update_eocd_directory_offset(signing: Signing, mmapped_file: []u8) void {
-    std.debug.assert(signing.signing_block_offset < std.math.maxInt(u32));
-    const pos = @as(u32, @intCast(signing.signing_block_offset));
-    const eocd = mmapped_file[signing.end_of_central_directory_offset..];
-    std.mem.writeInt(u32, eocd[16..20], pos, .little);
-}
+        std.debug.assert(section1.len != 0);
+        // std.debug.assert(section2.len != 0);
+        std.debug.assert(section3.len != 0);
+        std.debug.assert(section4.len != 0);
+
+        const MB = 1024 * 1024; // 2 << 20;
+        const section1_count = try std.math.divCeil(usize, section1.len, MB);
+        // const section2_count = std.math.divCeil(usize, section2.len, MB);
+        const section3_count = try std.math.divCeil(usize, section3.len, MB);
+        const section4_count = try std.math.divCeil(usize, section4.len, MB);
+
+        const total_count = section1_count + section3_count + section4_count;
+
+        var chunks = std.ArrayListUnmanaged([]const u8){};
+        try chunks.ensureTotalCapacity(ally, total_count);
+
+        // Split ZIP entries into 1 mb chunks
+        {
+            var count: usize = 0;
+            while (count < section1_count) : (count += 1) {
+                const end = @min((count + 1) * MB, section1.len);
+                const chunk = section1[count * MB .. end];
+                std.debug.assert(chunk.len <= MB);
+                chunks.appendAssumeCapacity(chunk);
+            }
+        }
+        // Split Central Directory into 1 mb chunks
+        {
+            var count: usize = 0;
+            while (count < section3_count) : (count += 1) {
+                const end = @min((count + 1) * MB, section3.len);
+                const chunk = section3[count * MB .. end];
+                std.debug.assert(chunk.len <= MB);
+                chunks.appendAssumeCapacity(chunk);
+            }
+        }
+        // Split End of Central Directory into 1 mb chunks
+        {
+            var count: usize = 0;
+            while (count < section4_count) : (count += 1) {
+                const end = @min((count + 1) * MB, section4.len);
+                const chunk = section4[count * MB .. end];
+                std.debug.assert(chunk.len <= MB);
+                chunks.appendAssumeCapacity(chunk);
+            }
+        }
+
+        return chunks.toOwnedSlice(ally);
+    }
+};
 
 /// Locates the signing block and verifies that the:
 /// - two size fields of the APK signing Block contain the same value
@@ -201,12 +230,12 @@ pub fn update_eocd_directory_offset(signing: Signing, mmapped_file: []u8) void {
 /// - ZIP end of central directory record is not followed by more data
 ///
 /// # Parameters
-/// - mmapped_file: the contents of the APK file as a byte slice
+/// - apk_contents: the contents of the APK file as a byte slice
 ///
 /// # Return
 /// Returns an instance of the Signing struct
-pub fn get_offsets(alloc: std.mem.Allocator, mmapped_file: []const u8) !Signing {
-    const fixed_buffer_stream = std.io.FixedBufferStream([]const u8){ .buffer = mmapped_file, .pos = 0 };
+pub fn get_offsets(alloc: std.mem.Allocator, apk_contents: []u8) !SigningOffsets {
+    const fixed_buffer_stream = std.io.FixedBufferStream([]const u8){ .buffer = apk_contents, .pos = 0 };
     var stream_source = std.io.StreamSource{ .const_buffer = fixed_buffer_stream };
 
     // TODO: change zig-archive to allow operating without a buffer
@@ -218,17 +247,18 @@ pub fn get_offsets(alloc: std.mem.Allocator, mmapped_file: []const u8) !Signing 
     const expected_eocd_start = archive_reader.directory_offset + archive_reader.directory_size;
 
     // TODO: verify central directory immediately follows ZIP eocd
-    // if (!std.mem.eql(u8, mmapped_file[expected_eocd_start..][0..4], &std.mem.toBytes(archive.formats.zip.internal.EndOfCentralDirectoryRecord.signature))) {
+    // if (!std.mem.eql(u8, apk_contents[expected_eocd_start..][0..4], &std.mem.toBytes(archive.formats.zip.internal.EndOfCentralDirectoryRecord.signature))) {
     //     return error.EOCDDoesNotImmediatelyFollowCentralDirectory;
     // }
 
     // TODO: verify eocd is end of file. Is the comment field allowed to contain data?
 
-    return Signing{
+    return SigningOffsets{
         .signing_block_offset = signing_block,
         .central_directory_offset = archive_reader.directory_offset,
         .end_of_central_directory_offset = expected_eocd_start,
-        .signing_block = mmapped_file[signing_block..archive_reader.directory_offset],
+        .signing_block = apk_contents[signing_block..archive_reader.directory_offset],
+        .apk_contents = apk_contents,
     };
 }
 
@@ -266,30 +296,6 @@ fn get_signing_block_offset(stream_source: *std.io.StreamSource, directory_offse
     return block_start;
 }
 
-/// Within the signing block, finds the entry that corresponds to a given
-/// signing scheme version.
-///
-/// # Parameters
-/// - signing_block: A slice of bytes corresponding to the APK signing block
-/// - tag: The SigningEntry.Tag value for the desired entry
-///
-/// # Return
-/// Returns a slice corresponding to the signing entry within the signing block
-pub fn locate_entry(signing: Signing, tag: SigningEntry.Tag) !?[]const u8 {
-    var index: usize = 8; // skip the signing block size
-    while (index < signing.signing_block.len) {
-        const size = std.mem.readInt(u64, signing.signing_block[index..][0..8], .little);
-        if (size > signing.signing_block.len) return error.SigningEntryLengthOutOfBounds;
-        const entry_tag = @as(SigningEntry.Tag, @enumFromInt(std.mem.readInt(u32, signing.signing_block[index + 8 ..][0..4], .little)));
-
-        if (entry_tag == tag)
-            return signing.signing_block[index + 12 ..][0 .. size - 4];
-
-        index += size + 8;
-    }
-    return null;
-}
-
 // TODO: make this order less arbitrary
 pub const default_algorithm_try_order = [_]SigningEntry.Signer.Algorithm{
     .sha256_RSASSA_PSS,
@@ -323,13 +329,13 @@ pub const default_algorithm_try_order = [_]SigningEntry.Signer.Algorithm{
 ///    e. Verify that the computed digest is identical to the corresponding `digest` from `digests`
 ///    f. Verify that `SubjectPublicKeyInfo` of the first `certificate` of `certificates` is identical to `public key`.
 /// 4. Verification succeeds if at least one `signer` was found and step 3 succeeded for each found `signer`.
-pub fn verify_v2(ally: std.mem.Allocater, apk: []const u8, entry_v2: []const u8, algorithm_try_order: []const SigningEntry.Signer.Algorithm) !void {
+pub fn verify_v2(offsets: SigningOffsets, ally: std.mem.Allocator, entry_v2: []const u8, algorithm_try_order: []const SigningEntry.Signer.Algorithm) !void {
     const signer_list_iter = try get_length_prefixed_slice(entry_v2);
-    std.debug.assert(signer_list_iter.remaining == null);
+    // std.debug.assert(signer_list_iter.remaining == null);
 
     var signer_count: usize = 0;
     var iter = try get_length_prefixed_slice_iter(signer_list_iter.slice);
-    while (iter.next()) |signer_slice| {
+    while (try iter.next()) |signer_slice| {
         signer_count += 1;
 
         const signed_data_block = try get_length_prefixed_slice(signer_slice);
@@ -407,78 +413,110 @@ pub fn verify_v2(ally: std.mem.Allocater, apk: []const u8, entry_v2: []const u8,
             .sha512_ECDSA,
             .sha256_DSA_PKCS1_v1_5,
             => return error.Unimplemented,
+            _ => return error.Unknown,
         }
 
         // C. Verify algorithm lists are the same
         const digest_sequence = try get_length_prefixed_slice(signed_data_block.slice);
-        var digest_iter = try get_length_prefixed_slice_iter(digest_sequence.slice);
-        var signature_iter = get_length_prefixed_slice_iter(signature_sequence) catch return null;
-        while (try digest_iter.next()) |digest_chunk| {
-            const signature = signature_iter.next();
-            const digest_algorithm_id = std.mem.readInt(u32, digest_chunk[0..4], .little);
-            const digest_algorithm: SigningEntry.Signer.Algorithm = @enumFromInt(digest_algorithm_id);
+        {
+            var digest_iter = try get_length_prefixed_slice_iter(digest_sequence.slice);
+            var signature_iter = try get_length_prefixed_slice_iter(signature_sequence.slice);
+            while (try digest_iter.next()) |digest_chunk| {
+                const signature = try signature_iter.next() orelse return error.MismatchedAlgorithmList;
+                const digest_algorithm_id = std.mem.readInt(u32, digest_chunk[0..4], .little);
+                const digest_algorithm: SigningEntry.Signer.Algorithm = @enumFromInt(digest_algorithm_id);
 
-            const signature_algorithm_id = std.mem.readInt(u32, signature[0..4], .little);
-            const signature_algorithm: SigningEntry.Signer.Algorithm = @enumFromInt(signature_algorithm_id);
+                const signature_algorithm_id = std.mem.readInt(u32, signature[0..4], .little);
+                const signature_algorithm: SigningEntry.Signer.Algorithm = @enumFromInt(signature_algorithm_id);
 
-            if (digest_algorithm != signature_algorithm) return error.MismatchedAlgorithmList;
+                if (digest_algorithm != signature_algorithm) return error.MismatchedAlgorithmList;
+            }
         }
 
-        _ = apk;
-        _ = ally;
         // TODO
         // D. Compute digest
-        // const chunks = try signing.splitAPK(ally, apk_map, signing_block_offset, directory_offset, eocd_offset);
+        offsets.update_eocd_directory_offset();
+        const chunks = try offsets.splitAPK(ally);
 
-        // // TODO: use the correct algorithm instead of assuming Sha256
-        // const Sha256 = std.crypto.hash.sha2.Sha256;
+        switch (selected_signature.algorithm) {
+            .sha256_RSASSA_PSS,
+            .sha256_ECDSA,
+            .sha256_RSASSA_PKCS1_v1_5,
+            .sha256_DSA_PKCS1_v1_5,
+            => {
+                const Sha256 = std.crypto.hash.sha2.Sha256;
 
-        // // Allocate enough memory to store all the digests
-        // const digest_mem = try alloc.alloc(u8, Sha256.digest_length * chunks.len);
-        // defer alloc.free(digest_mem);
+                // Allocate enough memory to store all the digests
+                const digest_mem = try ally.alloc(u8, Sha256.digest_length * chunks.len);
+                defer ally.free(digest_mem);
 
-        // // Loop over every chunk and compute its digest
-        // for (chunks, 0..) |chunk, i| {
-        //     var hash = Sha256.init(.{});
+                // Loop over every chunk and compute its digest
+                for (chunks, 0..) |chunk, i| {
+                    var hash = Sha256.init(.{});
 
-        //     var size_buf: [4]u8 = undefined;
-        //     const size = @as(u32, @intCast(chunk.len));
-        //     std.mem.writeInt(u32, &size_buf, size, .little);
+                    var size_buf: [4]u8 = undefined;
+                    const size = @as(u32, @intCast(chunk.len));
+                    std.mem.writeInt(u32, &size_buf, size, .little);
 
-        //     hash.update(&.{0xa5}); // Magic value byte
-        //     hash.update(&size_buf); // Size in bytes, le u32
-        //     hash.update(chunk); // Chunk contents
+                    hash.update(&.{0xa5}); // Magic value byte
+                    hash.update(&size_buf); // Size in bytes, le u32
+                    hash.update(chunk); // Chunk contents
 
-        //     hash.final(digest_mem[i * Sha256.digest_length ..][0..Sha256.digest_length]);
-        // }
+                    hash.final(digest_mem[i * Sha256.digest_length ..][0..Sha256.digest_length]);
+                }
+                // E. Verify computed digest matches stored digest
+                // Compute the digest over all chunks
 
-        // TODO
-        // // E. Verify computed digest matches stored digest
-        // // Compute the digest over all chunks
+                var hash = Sha256.init(.{});
+                var size_buf: [4]u8 = undefined;
+                std.mem.writeInt(u32, &size_buf, @as(u32, @intCast(chunks.len)), .little);
+                hash.update(&.{0x5a}); // Magic value byte for final digest
+                hash.update(&size_buf);
+                hash.update(digest_mem);
+                const final_digest = hash.finalResult();
 
-        // var hash = Sha256.init(.{});
-        // var size_buf: [4]u8 = undefined;
-        // std.mem.writeInt(u32, &size_buf, @as(u32, @intCast(chunks.len)), .little);
-        // hash.update(&.{0x5a}); // Magic value byte for final digest
-        // hash.update(&size_buf);
-        // hash.update(digest_mem);
-        // const final_digest = hash.finalResult();
-        // // Compare the final digest with the one stored in the signing block
-        // const digest_is_equal = std.mem.eql(u8, signing_entry.V2.items[0].signed_data.digests.items[0].data, &final_digest);
-        // try stdout.writer().print("{}\n", .{std.fmt.fmtSliceHexUpper(&final_digest)});
-        // if (digest_is_equal) {
-        //     try stdout.writer().print("Digest Equal\n", .{});
-        // } else {
-        //     try stdout.writer().print("ERROR - Digest Value Differs!\n", .{});
-        // }
+                var digest_iter = try get_length_prefixed_slice_iter(digest_sequence.slice);
+                const stored_digest = stored_digest: while (try digest_iter.next()) |digest_chunk| {
+                    const digest_algorithm_id = std.mem.readInt(u32, digest_chunk[0..4], .little);
+                    const digest_algorithm: SigningEntry.Signer.Algorithm = @enumFromInt(digest_algorithm_id);
+
+                    if (digest_algorithm != selected_signature.algorithm) continue;
+                    const digest_length = std.mem.readInt(u32, digest_chunk[4..8], .little);
+                    const digest = digest_chunk[8..][0..digest_length];
+
+                    break :stored_digest digest;
+                } else {
+                    return error.StoredDigestNotFound;
+                };
+
+                // Compare the final digest with the one stored in the signing block
+                const digest_is_equal = std.mem.eql(u8, stored_digest, &final_digest);
+                if (!digest_is_equal) return error.DigestMismatch;
+            },
+            .sha512_RSASSA_PSS,
+            .sha512_RSASSA_PKCS1_v1_5,
+            .sha512_ECDSA,
+            => return error.Unimplemented,
+            _ => return error.Unknown,
+        }
 
         // F. Verify SubjectPublicKeyInfo of first certificate is equal to public key
-        return error.ImplementationUnfinished;
+
+        const x509_sequence = try get_length_prefixed_slice(digest_sequence.remaining orelse return error.MissingCertificate);
+
+        var x509_iter = get_length_prefixed_slice_iter(x509_sequence.slice) catch return error.MissingCertificate;
+        const x509_chunk = try x509_iter.next() orelse return error.MissingCertificate; // get first
+        const x509_cert = std.crypto.Certificate{ .buffer = x509_chunk, .index = 0 };
+        const x509_parsed = try x509_cert.parse();
+
+        const pub_key = public_key_chunk.slice[public_key.data.start..public_key.data.end];
+
+        if (!std.mem.eql(u8, pub_key, x509_parsed.pubKey())) return error.MismatchedCertificate;
     }
     if (signer_count == 0) return error.NoSignersFound;
 }
 
-fn get_signer_algorithm(signature_sequence: []const u8, algorithm_find: SigningEntry.Signer.Algorithm) ?SigningEntry.Signer {
+fn get_signer_algorithm(signature_sequence: []const u8, algorithm_find: SigningEntry.Signer.Algorithm) ?SigningEntry.Signer.Signature {
     var signature_iter = get_length_prefixed_slice_iter(signature_sequence) catch return null;
     while (signature_iter.next() catch return null) |signature| {
         // Find strongest algorithm
@@ -486,8 +524,8 @@ fn get_signer_algorithm(signature_sequence: []const u8, algorithm_find: SigningE
         const algorithm: SigningEntry.Signer.Algorithm = @enumFromInt(signature_algorithm_id);
 
         if (algorithm == algorithm_find) {
-            const signed_data_sig = get_length_prefixed_slice(signature[4..]) catch return error.UnexpectedEndOfStream;
-            return SigningEntry.Signer{
+            const signed_data_sig = get_length_prefixed_slice(signature[4..]) catch return null;
+            return SigningEntry.Signer.Signature{
                 .algorithm = algorithm,
                 .signature = signed_data_sig.slice,
             };
