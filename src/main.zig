@@ -22,6 +22,7 @@ const usage =
     \\  align   <file>                  Aligns a zip file
     \\  verify  <file>                  Verifies the signature of an APK file
     \\  sign    <file>                  Signs an APK file
+    \\  view-signatures <file>          Parses and displays signatures from an APK
     \\  binxml  <file>                  Reads an Android binary XML file
     \\  xml     <file>                  Converts an XML file to an Android binary XML file
     \\  apk     <file>                  Reads the AndroidManifest.xml in the indicated apk
@@ -39,6 +40,7 @@ const Subcommand = enum {
     sign,
     verify,
     // pkg,
+    @"view-signatures",
 };
 
 pub fn main() !void {
@@ -76,6 +78,7 @@ pub fn run(stdout: std.fs.File) !void {
         .sign => try signZip(alloc, args, stdout),
         .verify => try verifyAPK(alloc, args, stdout),
         // .pkg => try writePackage(alloc, args, stdout),
+        .@"view-signatures" => try viewSignaturesAPK(alloc, args, stdout),
     }
 }
 
@@ -259,6 +262,60 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     defer std.os.munmap(apk_map);
 
     try signing.verify(alloc, apk_map);
+}
+
+pub fn viewSignaturesAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
+    const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+    const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
+    const dir = try std.fs.openDirAbsolute(dirpath, .{});
+    const file = try dir.openFile(filepath, .{});
+
+    const apk_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, std.os.MAP.PRIVATE, file.handle, 0);
+    defer std.os.munmap(apk_map);
+
+    const signature = try signing.parse(alloc, apk_map);
+    // TODO: correct deinit code
+    // defer {
+    //     for (signature) |*entry| {
+    //         entry.deinit();
+    //     }
+    // }
+    for (signature) |entry| switch (entry) {
+        .V2 => |signers| for (signers.items, 0..) |signer, i| {
+            try std.fmt.format(stdout.writer(), "Signer {}:\n", .{i});
+            try std.fmt.format(stdout.writer(), "\tPublic Key: {}\n", .{std.fmt.fmtSliceHexUpper(signer.public_key)});
+            try std.fmt.format(stdout.writer(), "\tSigned Data Signatures\n", .{});
+            for (signer.signatures.items) |sig| {
+                try std.fmt.format(stdout.writer(), "\t\tAlgorithm: {}, Signature: {}\n", .{ sig.algorithm, std.fmt.fmtSliceHexUpper(sig.signature) });
+            }
+            try std.fmt.format(stdout.writer(), "\tSigned Data\n\t\tDigests\n", .{});
+            for (signer.signed_data.digests.items) |digest| {
+                try std.fmt.format(stdout.writer(), "\t\t\tAlgorithm: {}, Digest: {}\n", .{ digest.algorithm, std.fmt.fmtSliceHexUpper(digest.data) });
+            }
+            try std.fmt.format(stdout.writer(), "\t\tCertificates\n", .{});
+            for (signer.signed_data.certificates.items) |cert| {
+                try std.fmt.format(stdout.writer(), "\t\t\tCertificate: {}\n", .{std.fmt.fmtSliceHexUpper(cert.certificate.buffer)});
+                try std.fmt.format(stdout.writer(), "\t\t\t\tVersion: {}\n", .{cert.version});
+                try std.fmt.format(stdout.writer(), "\t\t\t\tCommon name: {s}\n", .{cert.commonName()});
+                try std.fmt.format(stdout.writer(), "\t\t\t\tIssuer: {s}\n", .{cert.issuer()});
+                try std.fmt.format(stdout.writer(), "\t\t\t\tSubject: {s}\n", .{cert.subject()});
+                try std.fmt.format(stdout.writer(), "\t\t\t\tSignature Algorithm: {}\n", .{cert.signature_algorithm});
+                try std.fmt.format(stdout.writer(), "\t\t\t\tSignature: {}\n", .{std.fmt.fmtSliceHexUpper(cert.signature())});
+                // Seems to mostly just be the certificate?
+                // if (cert.message_slice.start < cert.message_slice.end) {
+                //     try std.fmt.format(stdout.writer(), "\t\t\t\tMessage: {}\n", .{std.fmt.fmtSliceHexLower(cert.message())});
+                // }
+                try std.fmt.format(stdout.writer(), "\t\t\t\tPub Key Algorithm: {}\n", .{cert.pub_key_algo});
+                try std.fmt.format(stdout.writer(), "\t\t\t\tPub Key: {}\n", .{std.fmt.fmtSliceHexUpper(cert.pubKey())});
+                try std.fmt.format(stdout.writer(), "\t\t\t\tNot valid before: {}\tNot valid after: {}\n", .{ cert.validity.not_before, cert.validity.not_after });
+                try std.fmt.format(stdout.writer(), "\t\t\t\tSubject Alt Name: {s}\n", .{cert.subjectAltName()});
+            }
+            try std.fmt.format(stdout.writer(), "\t\tAttributes\n", .{});
+            for (signer.signed_data.attributes.items) |attribute| {
+                try std.fmt.format(stdout.writer(), "\t\t\tId: {}, Value: {d}\n", .{ attribute.id, std.fmt.fmtSliceHexUpper(attribute.value) });
+            }
+        },
+    };
 }
 
 pub fn alignZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
