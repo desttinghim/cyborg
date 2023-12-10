@@ -3,7 +3,139 @@
 
 const Element = std.crypto.Certificate.der.Element;
 
-/// Parses the public key
+pub const SigningChain = struct {
+    /// Which public key to store outside of the signed data block
+    primary_certificate: usize = 0,
+    certificates: std.ArrayListUnmanaged(std.crypto.Certificate),
+    private_keys: std.ArrayListUnmanaged(),
+
+    pub const AlgorithmIdentifier = union(enum) {};
+
+    /// Encrypted data containing a private key
+    pub const EncryptedPrivateKey = struct {
+        algorithm: AlgorithmIdentifier,
+        encrypted_data: []const u8,
+    };
+
+    pub const PrivateKeyInfo = struct {
+        algorithm: AlgorithmIdentifier,
+        version: enum {},
+        data: []const u8,
+    };
+};
+
+const PEM =
+    \\Bag Attributes
+    \\    friendlyName: android
+    \\    localKeyID: 54 69 6D 65 20 31 37 30 32 31 36 32 38 34 37 35 32 37
+    \\Key Attributes: <No Attributes>
+    \\-----BEGIN ENCRYPTED PRIVATE KEY-----
+    \\MIGrMFcGCSqGSIb3DQEFDTBKMCkGCSqGSIb3DQEFDDAcBAi5Sg3u6HvHtgICCAAw
+    \\DAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEELo8w1H/ZnZ8v3j2Rb97SAYEUHON
+    \\U4L4PtauE/F4HnuxpN8cTXFOIq6Qub3ORHDsqk+ACy/A7N/JE3hyMCV8EcNfDQq9
+    \\1AaaEnRAAwP7u6sCOx31jv+YivcuEhKuInj+4Vog
+    \\-----END ENCRYPTED PRIVATE KEY-----
+    \\Bag Attributes
+    \\    friendlyName: android
+    \\    localKeyID: 54 69 6D 65 20 31 37 30 32 31 36 32 38 34 37 35 32 37
+    \\subject=C =
+    \\issuer=C =
+    \\-----BEGIN CERTIFICATE-----
+    \\MIIBKzCB0aADAgECAgRdOjvMMAwGCCqGSM49BAMCBQAwCzEJMAcGA1UEBhMAMB4X
+    \\DTE3MTAxMTAwMzI0MVoXDTE4MDEwOTAwMzI0MVowCzEJMAcGA1UEBhMAMFkwEwYH
+    \\KoZIzj0CAQYIKoZIzj0DAQcDQgAEYjmLI+SkCu77Q7pt9o3YDunraL/IKlZGMyav
+    \\fvLs4s0U3T0izddJnFwDxMZ1ShNSyUnxOeexniVoK9HWG3uO0qMhMB8wHQYDVR0O
+    \\BBYEFJzHhvkxZ88VjoTyL21tJOYKtgVOMAwGCCqGSM49BAMCBQADRwAwRAIgSyy8
+    \\Mg9zvJEfqNl94sgOIdpNn4PHdH7pOVuHP8I10TsCIDz7q63Pda/dIc03HCNkoMMY
+    \\VR9SpX5DHe/L1KbojzoT
+    \\-----END CERTIFICATE-----
+;
+
+test "retrieve private key" {
+    const start_with_header = std.mem.indexOf(u8, PEM, "-----BEGIN ENCRYPTED PRIVATE KEY-----") orelse return error.MissingBeginPrivateKey;
+    const start = 1 + (std.mem.indexOfScalarPos(u8, PEM, start_with_header, '\n') orelse return error.MissingNewLine);
+    const end = std.mem.indexOf(u8, PEM, "-----END ENCRYPTED PRIVATE KEY") orelse return error.MissingEndPrivateKey;
+    const trimmed_slice = std.mem.trim(u8, PEM[start..end], " \n");
+    try std.testing.expectEqualStrings(
+        \\MIGrMFcGCSqGSIb3DQEFDTBKMCkGCSqGSIb3DQEFDDAcBAi5Sg3u6HvHtgICCAAw
+        \\DAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEELo8w1H/ZnZ8v3j2Rb97SAYEUHON
+        \\U4L4PtauE/F4HnuxpN8cTXFOIq6Qub3ORHDsqk+ACy/A7N/JE3hyMCV8EcNfDQq9
+        \\1AaaEnRAAwP7u6sCOx31jv+YivcuEhKuInj+4Vog
+    , trimmed_slice);
+    const decoder = std.base64.standard.decoderWithIgnore("\n");
+    const upper_bound: usize = trimmed_slice.len / 4 * 3;
+    const buf = try std.testing.allocator.alloc(u8, upper_bound);
+    defer std.testing.allocator.free(buf);
+    const size = try decoder.decode(buf, trimmed_slice);
+    const decoded = buf[0..size];
+
+    const sequence = try std.crypto.Certificate.der.Element.parse(decoded, 0);
+    const encryption_algorithm_seq = try std.crypto.Certificate.der.Element.parse(decoded, sequence.slice.start);
+    const algorithm_oid = try std.crypto.Certificate.der.Element.parse(decoded, encryption_algorithm_seq.slice.start);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.object_identifier, algorithm_oid.identifier.tag);
+
+    const AlgorithmCategory = enum {
+        pkcs5PBES2,
+        pkcs5PBKDF2,
+        hmacWithSHA256,
+
+        pub const map = std.ComptimeStringMap(@This(), .{
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x05, 0x0D }, .pkcs5PBES2 },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x05, 0x0C }, .pkcs5PBKDF2 },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x09 }, .hmacWithSHA256 },
+        });
+    };
+
+    const algorithm_category = try parseEnum(AlgorithmCategory, decoded, algorithm_oid);
+    try std.testing.expectEqual(AlgorithmCategory.pkcs5PBES2, algorithm_category);
+
+    const AlgorithmParams = union(AlgorithmCategory) {
+        pkcs5PBES2: struct {
+            salt: union(enum) {
+                specified: std.crypto.Certificate.der.Element.Slice,
+                otherSource: std.crypto.Certificate.der.Element,
+            },
+            iterationCount: usize,
+            keyLength: usize,
+            prf: std.crypto.Certificate.der.Element,
+        },
+    };
+    _ = AlgorithmParams;
+    const alg_param_sequence = try std.crypto.Certificate.der.Element.parse(decoded, algorithm_oid.slice.end);
+
+    const kdf_seq = try std.crypto.Certificate.der.Element.parse(decoded, alg_param_sequence.slice.start);
+    const kdf_id = try std.crypto.Certificate.der.Element.parse(decoded, kdf_seq.slice.start);
+    const kdf_category = try parseEnum(AlgorithmCategory, decoded, kdf_id);
+    try std.testing.expectEqual(AlgorithmCategory.pkcs5PBKDF2, kdf_category);
+
+    const kdf_param_seq = try std.crypto.Certificate.der.Element.parse(decoded, kdf_id.slice.end);
+    const salt = try std.crypto.Certificate.der.Element.parse(decoded, kdf_param_seq.slice.start);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, salt.identifier.tag);
+    const iteration_count = try std.crypto.Certificate.der.Element.parse(decoded, salt.slice.end);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.integer, iteration_count.identifier.tag);
+    const prf_sequence = try std.crypto.Certificate.der.Element.parse(decoded, iteration_count.slice.end);
+    const prf_id = try std.crypto.Certificate.der.Element.parse(decoded, prf_sequence.slice.start);
+    const prf_category = try parseEnum(AlgorithmCategory, decoded, prf_id);
+    try std.testing.expectEqual(AlgorithmCategory.hmacWithSHA256, prf_category);
+
+    const encryption_seq = try std.crypto.Certificate.der.Element.parse(decoded, kdf_seq.slice.end);
+    const encryption_scheme = try std.crypto.Certificate.der.Element.parse(decoded, encryption_seq.slice.start);
+    const encryption_scheme_data = try std.crypto.Certificate.der.Element.parse(decoded, encryption_scheme.slice.end);
+    _ = encryption_scheme_data;
+
+    const encrypted_data = try std.crypto.Certificate.der.Element.parse(decoded, encryption_algorithm_seq.slice.end);
+    _ = encrypted_data;
+}
+
+pub const ParseEnumError = error{ CertificateFieldHasWrongDataType, CertificateHasUnrecognizedObjectId };
+
+fn parseEnum(comptime E: type, bytes: []const u8, element: std.crypto.Certificate.der.Element) ParseEnumError!E {
+    if (element.identifier.tag != .object_identifier)
+        return error.CertificateFieldHasWrongDataType;
+    const oid_bytes = bytes[element.slice.start..element.slice.end];
+    return E.map.get(oid_bytes) orelse return error.CertificateHasUnrecognizedObjectId;
+}
+
 pub const PublicKey = struct {
     algorithm: PubKeyAlgo,
     cert: std.crypto.Certificate,
@@ -154,6 +286,16 @@ pub const SigningOptions = struct {
 };
 
 /// Takes an unsigned APK files and returns a signed one
+///
+/// To sign an APK, we need a keystore. Android projects store their keys in the `.jks` format, which is a
+/// java specific encoding for storing public keys and private keys. I have not researched how specifically this encoding works.
+///
+/// PEM files are used more often in open source projects outside of the java ecosystem. They store the certificates in a base64
+/// encoded string in a file between a `----BEGIN [PRIVATE KEY | CERTIFICATE]----` tag and `----END [PRIVATE KEY | CERTIFICATE]----`
+/// tag.
+///
+/// Certificates that store the public key are in the x.509 format. The private key format varies based on the specific algorithm being used.
+/// All of the sub-formats are based on the ASN.1 DER binary encoding.
 pub fn sign(ally: std.mem.Allocator, apk_contents: []u8, pub_key: std.crypto.Certificate.Parsed, opt: SigningOptions) ![]u8 {
     const fixed_buffer_stream = std.io.FixedBufferStream([]const u8){ .buffer = apk_contents, .pos = 0 };
     var stream_source = std.io.StreamSource{ .const_buffer = fixed_buffer_stream };
