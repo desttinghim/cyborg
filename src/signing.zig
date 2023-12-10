@@ -24,6 +24,10 @@ pub const SigningChain = struct {
     };
 };
 
+/// Contents of a PEM file for testing parsing. Includes an encrypted private key and the matching
+/// public certificate. Automatically generated using a shell script from ApkGolf.
+/// WARN: Do not trust/use this certificate in the wild! There is no knowing what it may have been
+/// used for after being published online.
 const PEM =
     \\Bag Attributes
     \\    friendlyName: android
@@ -50,6 +54,9 @@ const PEM =
     \\VR9SpX5DHe/L1KbojzoT
     \\-----END CERTIFICATE-----
 ;
+
+/// Password to decrypt the PEM test file.
+const PEM_password = "android";
 
 test "retrieve private key" {
     const start_with_header = std.mem.indexOf(u8, PEM, "-----BEGIN ENCRYPTED PRIVATE KEY-----") orelse return error.MissingBeginPrivateKey;
@@ -103,6 +110,7 @@ test "retrieve private key" {
     _ = AlgorithmParams;
     const alg_param_sequence = try std.crypto.Certificate.der.Element.parse(decoded, algorithm_oid.slice.end);
 
+    // Calculate the private key from the password
     const kdf_seq = try std.crypto.Certificate.der.Element.parse(decoded, alg_param_sequence.slice.start);
     const kdf_id = try std.crypto.Certificate.der.Element.parse(decoded, kdf_seq.slice.start);
     const kdf_category = try parseEnum(AlgorithmCategory, decoded, kdf_id);
@@ -113,18 +121,177 @@ test "retrieve private key" {
     try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, salt.identifier.tag);
     const iteration_count = try std.crypto.Certificate.der.Element.parse(decoded, salt.slice.end);
     try std.testing.expectEqual(std.crypto.Certificate.der.Tag.integer, iteration_count.identifier.tag);
+    const rounds = std.mem.readInt(u16, make_slice(decoded, iteration_count.slice)[0..2], .big);
+    try std.testing.expectEqual(@as(u16, 2048), rounds);
     const prf_sequence = try std.crypto.Certificate.der.Element.parse(decoded, iteration_count.slice.end);
     const prf_id = try std.crypto.Certificate.der.Element.parse(decoded, prf_sequence.slice.start);
     const prf_category = try parseEnum(AlgorithmCategory, decoded, prf_id);
     try std.testing.expectEqual(AlgorithmCategory.hmacWithSHA256, prf_category);
+    const prf = std.crypto.auth.hmac.sha2.HmacSha256;
 
+    var decryption_key: [32]u8 = undefined;
+    try std.crypto.pwhash.pbkdf2(&decryption_key, PEM_password, make_slice(decoded, salt.slice), rounds, prf);
+
+    // Decrypt the data using the retrieved private key
     const encryption_seq = try std.crypto.Certificate.der.Element.parse(decoded, kdf_seq.slice.end);
     const encryption_scheme = try std.crypto.Certificate.der.Element.parse(decoded, encryption_seq.slice.start);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.object_identifier, encryption_scheme.identifier.tag);
     const encryption_scheme_data = try std.crypto.Certificate.der.Element.parse(decoded, encryption_scheme.slice.end);
-    _ = encryption_scheme_data;
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, encryption_scheme_data.identifier.tag);
+    const iv_slice = make_slice(decoded, encryption_scheme_data.slice);
+    var iv_array: [16]u8 = undefined;
+    @memcpy(&iv_array, iv_slice);
 
     const encrypted_data = try std.crypto.Certificate.der.Element.parse(decoded, encryption_algorithm_seq.slice.end);
-    _ = encrypted_data;
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, encrypted_data.identifier.tag);
+    const ed_slice = make_slice(decoded, encrypted_data.slice);
+    try std.testing.expectEqual(@as(usize, 80), ed_slice.len);
+
+    try std.testing.expectEqualSlices(u8, &[_]u8{
+        0x73, 0x8D, 0x53, 0x82, 0xF8, 0x3E, 0xD6, 0xAE, 0x13, 0xF1,
+        0x78, 0x1E, 0x7B, 0xB1, 0xA4, 0xDF, 0x1C, 0x4D, 0x71, 0x4E,
+        0x22, 0xAE, 0x90, 0xB9, 0xBD, 0xCE, 0x44, 0x70, 0xEC, 0xAA,
+        0x4F, 0x80, 0x0B, 0x2F, 0xC0, 0xEC, 0xDF, 0xC9, 0x13, 0x78,
+        0x72, 0x30, 0x25, 0x7C, 0x11, 0xC3, 0x5F, 0x0D, 0x0A, 0xBD,
+        0xD4, 0x06, 0x9A, 0x12, 0x74, 0x40, 0x03, 0x03, 0xFB, 0xBB,
+        0xAB, 0x02, 0x3B, 0x1D, 0xF5, 0x8E, 0xFF, 0x98, 0x8A, 0xF7,
+        0x2E, 0x12, 0x12, 0xAE, 0x22, 0x78, 0xFE, 0xE1, 0x5A, 0x20,
+    }, ed_slice);
+
+    const message = try std.testing.allocator.alloc(u8, ed_slice.len);
+    defer std.testing.allocator.free(message);
+    const Aes256 = std.crypto.core.aes.Aes256;
+    const aes = Aes256.initDec(decryption_key);
+    cbc(@TypeOf(aes), aes, message, ed_slice, iv_array);
+
+    try std.testing.expectEqualSlices(u8, &[_]u8{
+        0x30, 0x41, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
+        0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x04, 0x27, 0x30, 0x25, 0x02, 0x01,
+        0x01, 0x04, 0x20, 0x74, 0xB1, 0x5B, 0x03, 0x81, 0x0B, 0x7D, 0xB5, 0x55, 0xAC, 0x99, 0xFB, 0x8C,
+        0x8C, 0xC5, 0x88, 0xB6, 0x27, 0xCA, 0xFF, 0x22, 0x6E, 0x24, 0x85, 0x9B, 0x5C, 0x0F, 0x84, 0x4D,
+        0x31, 0x36, 0xE6, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D,
+    }, message);
+
+    const private_key_info_sequence = try Element.parse(message, 0);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.sequence, private_key_info_sequence.identifier.tag);
+    const version = try Element.parse(message, private_key_info_sequence.slice.start);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.integer, version.identifier.tag);
+    const version_number = std.mem.readInt(u8, make_slice(message, version.slice)[0..1], .big);
+    try std.testing.expectEqual(@as(u16, 0), version_number);
+
+    const private_key_algorithm_seq = try Element.parse(message, version.slice.end);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.sequence, private_key_algorithm_seq.identifier.tag);
+    const private_key_algorithm = try Element.parse(message, private_key_algorithm_seq.slice.start);
+    const priv_key_algo = try std.crypto.Certificate.parseAlgorithmCategory(message, private_key_algorithm);
+    _ = priv_key_algo;
+
+    const private_key_param = try Element.parse(message, private_key_algorithm.slice.end);
+    const named_curve = try std.crypto.Certificate.parseNamedCurve(message, private_key_param);
+    _ = named_curve;
+
+    const private_key = try Element.parse(message, private_key_algorithm_seq.slice.end);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, private_key.identifier.tag);
+    const private_key_slice = make_slice(message, private_key.slice);
+
+    const seq = try Element.parse(private_key_slice, 0);
+    const integer = try Element.parse(private_key_slice, seq.slice.start);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.integer, integer.identifier.tag);
+    const octet_str = try Element.parse(private_key_slice, integer.slice.end);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, octet_str.identifier.tag);
+
+    const Scheme = std.crypto.sign.ecdsa.EcdsaP256Sha256;
+    var private_key_real: [Scheme.SecretKey.encoded_length]u8 = undefined;
+    @memcpy(&private_key_real, make_slice(private_key_slice, octet_str.slice));
+    const sk = try Scheme.SecretKey.fromBytes(private_key_real);
+    const kp = try Scheme.KeyPair.fromSecretKey(sk);
+
+    const sig = try kp.sign("hello", null);
+    try std.testing.expectEqualSlices(u8, &[_]u8{
+        0xC3, 0x94, 0x31, 0xDF, 0xD3, 0x85, 0xE4, 0x70, 0xE1, 0x2A, 0x50, 0x9F, 0x22, 0x53, 0x5C, 0xAA,
+        0x09, 0x44, 0xD9, 0xF2, 0x62, 0xCF, 0x3E, 0x0E, 0xB6, 0x7D, 0x10, 0x1B, 0x52, 0x75, 0x86, 0x70,
+        0xDD, 0xED, 0x36, 0xE4, 0xE7, 0x3C, 0x37, 0x86, 0x3F, 0x2F, 0x7C, 0xA8, 0x56, 0xF0, 0xF9, 0xA4,
+        0xA6, 0x72, 0xA3, 0xF4, 0x71, 0x06, 0x61, 0xE7, 0x0E, 0x0D, 0x07, 0x04, 0x13, 0xBF, 0x2E, 0x5A,
+    }, &sig.toBytes());
+    try sig.verify("hello", kp.public_key);
+}
+
+const PEM_dec =
+    \\-----BEGIN PRIVATE KEY-----
+    \\MEECAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQcEJzAlAgEBBCB0sVsDgQt9tVWsmfuM
+    \\jMWItifK/yJuJIWbXA+ETTE25g==
+    \\-----END PRIVATE KEY-----
+    \\
+;
+
+test "unencrypted private key" {
+    const start_with_header = std.mem.indexOf(u8, PEM_dec, "-----BEGIN PRIVATE KEY-----") orelse return error.MissingBeginPrivateKey;
+    const start = 1 + (std.mem.indexOfScalarPos(u8, PEM_dec, start_with_header, '\n') orelse return error.MissingNewLine);
+    const end = std.mem.indexOf(u8, PEM_dec, "-----END PRIVATE KEY-----") orelse return error.MissingEndPrivateKey;
+    const trimmed_slice = std.mem.trim(u8, PEM_dec[start..end], " \n");
+    try std.testing.expectEqualStrings(
+        \\MEECAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQcEJzAlAgEBBCB0sVsDgQt9tVWsmfuM
+        \\jMWItifK/yJuJIWbXA+ETTE25g==
+    , trimmed_slice);
+    const decoder = std.base64.standard.decoderWithIgnore("\n");
+    const upper_bound: usize = trimmed_slice.len / 4 * 3;
+    const buf = try std.testing.allocator.alloc(u8, upper_bound);
+    defer std.testing.allocator.free(buf);
+    const size = try decoder.decode(buf, trimmed_slice);
+    const decoded = buf[0..size];
+    try std.testing.expectEqualSlices(u8, &[_]u8{
+        0x30, 0x41, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
+        0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x04, 0x27, 0x30, 0x25, 0x02, 0x01,
+        0x01, 0x04, 0x20, 0x74, 0xB1, 0x5B, 0x03, 0x81, 0x0B, 0x7D, 0xB5, 0x55, 0xAC, 0x99, 0xFB, 0x8C,
+        0x8C, 0xC5, 0x88, 0xB6, 0x27, 0xCA, 0xFF, 0x22, 0x6E, 0x24, 0x85, 0x9B, 0x5C, 0x0F, 0x84, 0x4D,
+        0x31, 0x36, 0xE6,
+    }, decoded);
+
+    const private_key_info_sequence = try Element.parse(decoded, 0);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.sequence, private_key_info_sequence.identifier.tag);
+
+    const version = try Element.parse(decoded, private_key_info_sequence.slice.start);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.integer, version.identifier.tag);
+    const version_number = std.mem.readInt(u8, make_slice(decoded, version.slice)[0..1], .big);
+    try std.testing.expectEqual(@as(u16, 0), version_number);
+
+    const private_key_algorithm = try Element.parse(decoded, version.slice.end);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.sequence, private_key_algorithm.identifier.tag);
+
+    const private_key = try Element.parse(decoded, private_key_algorithm.slice.end);
+    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, private_key.identifier.tag);
+}
+
+/// Cipher block chaining mode.
+///
+///
+fn cbc(BlockCipher: anytype, block_cipher: BlockCipher, dst: []u8, src: []const u8, iv: [BlockCipher.block_length]u8) void {
+    std.debug.assert(dst.len >= src.len);
+    const block_length = BlockCipher.block_length;
+    var i: usize = 0;
+    var last_block: [block_length]u8 = iv;
+    while (i + block_length < src.len) : (i += block_length) {
+        var block: [block_length]u8 = undefined;
+        // xor block with last block or initialization vector
+        block_cipher.decrypt(&block, src[i..][0..block_length]);
+        for (block[0..], last_block[0..]) |*byte, prev| {
+            byte.* ^= prev;
+        }
+        // update last block value
+        @memcpy(dst[i..][0..block_length], &block);
+        @memcpy(&last_block, src[i..][0..block_length]);
+    }
+    // account for unaligned final block
+    if (i < src.len) {
+        var pad = [_]u8{0} ** block_length;
+        const src_slice = src[i..];
+        @memcpy(pad[0..src_slice.len], src_slice);
+        block_cipher.decrypt(&pad, &pad);
+        for (pad[0..], last_block[0..]) |*byte, prev| {
+            byte.* ^= prev;
+        }
+        const pad_slice = pad[0 .. src.len - i];
+        @memcpy(dst[i..][0..pad_slice.len], pad_slice);
+    }
 }
 
 pub const ParseEnumError = error{ CertificateFieldHasWrongDataType, CertificateHasUnrecognizedObjectId };
@@ -134,6 +301,10 @@ fn parseEnum(comptime E: type, bytes: []const u8, element: std.crypto.Certificat
         return error.CertificateFieldHasWrongDataType;
     const oid_bytes = bytes[element.slice.start..element.slice.end];
     return E.map.get(oid_bytes) orelse return error.CertificateHasUnrecognizedObjectId;
+}
+
+pub fn make_slice(buffer: []const u8, s: Element.Slice) []const u8 {
+    return buffer[s.start..s.end];
 }
 
 pub const PublicKey = struct {
