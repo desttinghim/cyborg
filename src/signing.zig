@@ -58,22 +58,50 @@ const PEM =
 /// Password to decrypt the PEM test file.
 const PEM_password = "android";
 
-test "retrieve private key" {
-    const start_with_header = std.mem.indexOf(u8, PEM, "-----BEGIN ENCRYPTED PRIVATE KEY-----") orelse return error.MissingBeginPrivateKey;
-    const start = 1 + (std.mem.indexOfScalarPos(u8, PEM, start_with_header, '\n') orelse return error.MissingNewLine);
-    const end = std.mem.indexOf(u8, PEM, "-----END ENCRYPTED PRIVATE KEY") orelse return error.MissingEndPrivateKey;
-    const trimmed_slice = std.mem.trim(u8, PEM[start..end], " \n");
+/// Type of certificate to retrieve from PEM file
+pub const CertType = enum {
+    EncryptedPrivateKey,
+    PrivateKey,
+    Certificate,
+};
+
+/// Returns the first slice of base64 encoded bytes between the header and footer that
+/// corresponds to the passed `CertType`.
+pub fn getPEMSlice(cert_type: CertType, file_buf: []const u8) ?[]const u8 {
+    const header = switch (cert_type) {
+        .EncryptedPrivateKey => "-----BEGIN ENCRYPTED PRIVATE KEY-----",
+        .PrivateKey => "-----BEGIN PRIVATE KEY-----",
+        .Certificate => "-----BEGIN CERTIFICATE-----",
+    };
+    const footer = switch (cert_type) {
+        .EncryptedPrivateKey => "-----END ENCRYPTED PRIVATE KEY-----",
+        .PrivateKey => "-----END PRIVATE KEY-----",
+        .Certificate => "-----END CERTIFICATE-----",
+    };
+    const start_with_header = std.mem.indexOf(u8, file_buf, header) orelse return null;
+    const start = 1 + (std.mem.indexOfScalarPos(u8, file_buf, start_with_header, '\n') orelse return null);
+    const end = std.mem.indexOf(u8, file_buf, footer) orelse return null;
+    const trimmed_slice = std.mem.trim(u8, file_buf[start..end], " \n");
+    return trimmed_slice;
+}
+
+test getPEMSlice {
+    const private_key = getPEMSlice(.EncryptedPrivateKey, PEM) orelse return error.MissingEncryptedPrivateKey;
     try std.testing.expectEqualStrings(
         \\MIGrMFcGCSqGSIb3DQEFDTBKMCkGCSqGSIb3DQEFDDAcBAi5Sg3u6HvHtgICCAAw
         \\DAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEELo8w1H/ZnZ8v3j2Rb97SAYEUHON
         \\U4L4PtauE/F4HnuxpN8cTXFOIq6Qub3ORHDsqk+ACy/A7N/JE3hyMCV8EcNfDQq9
         \\1AaaEnRAAwP7u6sCOx31jv+YivcuEhKuInj+4Vog
-    , trimmed_slice);
+    , private_key);
+}
+
+test "retrieve private key" {
+    const base64_enc_priv_key = getPEMSlice(.EncryptedPrivateKey, PEM) orelse return error.MissingEncryptedPrivateKey;
     const decoder = std.base64.standard.decoderWithIgnore("\n");
-    const upper_bound: usize = trimmed_slice.len / 4 * 3;
+    const upper_bound: usize = base64_enc_priv_key.len / 4 * 3;
     const buf = try std.testing.allocator.alloc(u8, upper_bound);
     defer std.testing.allocator.free(buf);
-    const size = try decoder.decode(buf, trimmed_slice);
+    const size = try decoder.decode(buf, base64_enc_priv_key);
     const decoded = buf[0..size];
 
     const sequence = try std.crypto.Certificate.der.Element.parse(decoded, 0);
@@ -224,19 +252,16 @@ const PEM_dec =
 ;
 
 test "unencrypted private key" {
-    const start_with_header = std.mem.indexOf(u8, PEM_dec, "-----BEGIN PRIVATE KEY-----") orelse return error.MissingBeginPrivateKey;
-    const start = 1 + (std.mem.indexOfScalarPos(u8, PEM_dec, start_with_header, '\n') orelse return error.MissingNewLine);
-    const end = std.mem.indexOf(u8, PEM_dec, "-----END PRIVATE KEY-----") orelse return error.MissingEndPrivateKey;
-    const trimmed_slice = std.mem.trim(u8, PEM_dec[start..end], " \n");
+    const base64_priv_key = getPEMSlice(.PrivateKey, PEM_dec) orelse return error.MissingPrivateKey;
     try std.testing.expectEqualStrings(
         \\MEECAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQcEJzAlAgEBBCB0sVsDgQt9tVWsmfuM
         \\jMWItifK/yJuJIWbXA+ETTE25g==
-    , trimmed_slice);
+    , base64_priv_key);
     const decoder = std.base64.standard.decoderWithIgnore("\n");
-    const upper_bound: usize = trimmed_slice.len / 4 * 3;
+    const upper_bound: usize = base64_priv_key.len / 4 * 3;
     const buf = try std.testing.allocator.alloc(u8, upper_bound);
     defer std.testing.allocator.free(buf);
-    const size = try decoder.decode(buf, trimmed_slice);
+    const size = try decoder.decode(buf, base64_priv_key);
     const decoded = buf[0..size];
     try std.testing.expectEqualSlices(u8, &[_]u8{
         0x30, 0x41, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
