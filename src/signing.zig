@@ -3,27 +3,6 @@
 
 const Element = std.crypto.Certificate.der.Element;
 
-pub const SigningChain = struct {
-    /// Which public key to store outside of the signed data block
-    primary_certificate: usize = 0,
-    certificates: std.ArrayListUnmanaged(std.crypto.Certificate),
-    private_keys: std.ArrayListUnmanaged(),
-
-    pub const AlgorithmIdentifier = union(enum) {};
-
-    /// Encrypted data containing a private key
-    pub const EncryptedPrivateKey = struct {
-        algorithm: AlgorithmIdentifier,
-        encrypted_data: []const u8,
-    };
-
-    pub const PrivateKeyInfo = struct {
-        algorithm: AlgorithmIdentifier,
-        version: enum {},
-        data: []const u8,
-    };
-};
-
 /// Contents of a PEM file for testing parsing. Includes an encrypted private key and the matching
 /// public certificate. Automatically generated using a shell script from ApkGolf.
 /// WARN: Do not trust/use this certificate in the wild! There is no knowing what it may have been
@@ -53,6 +32,13 @@ const PEM =
     \\Mg9zvJEfqNl94sgOIdpNn4PHdH7pOVuHP8I10TsCIDz7q63Pda/dIc03HCNkoMMY
     \\VR9SpX5DHe/L1KbojzoT
     \\-----END CERTIFICATE-----
+;
+
+const ENCRYPTED_PRIVATE_KEY =
+    \\MIGrMFcGCSqGSIb3DQEFDTBKMCkGCSqGSIb3DQEFDDAcBAi5Sg3u6HvHtgICCAAw
+    \\DAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEELo8w1H/ZnZ8v3j2Rb97SAYEUHON
+    \\U4L4PtauE/F4HnuxpN8cTXFOIq6Qub3ORHDsqk+ACy/A7N/JE3hyMCV8EcNfDQq9
+    \\1AaaEnRAAwP7u6sCOx31jv+YivcuEhKuInj+4Vog
 ;
 
 /// Password to decrypt the PEM test file.
@@ -87,17 +73,272 @@ pub fn getPEMSlice(cert_type: CertType, file_buf: []const u8) ?[]const u8 {
 
 test getPEMSlice {
     const private_key = getPEMSlice(.EncryptedPrivateKey, PEM) orelse return error.MissingEncryptedPrivateKey;
-    try std.testing.expectEqualStrings(
-        \\MIGrMFcGCSqGSIb3DQEFDTBKMCkGCSqGSIb3DQEFDDAcBAi5Sg3u6HvHtgICCAAw
-        \\DAYIKoZIhvcNAgkFADAdBglghkgBZQMEASoEELo8w1H/ZnZ8v3j2Rb97SAYEUHON
-        \\U4L4PtauE/F4HnuxpN8cTXFOIq6Qub3ORHDsqk+ACy/A7N/JE3hyMCV8EcNfDQq9
-        \\1AaaEnRAAwP7u6sCOx31jv+YivcuEhKuInj+4Vog
-    , private_key);
+    try std.testing.expectEqualStrings(ENCRYPTED_PRIVATE_KEY, private_key);
 }
 
 pub const PEMDecoder = std.base64.standard.decoderWithIgnore("\n");
 
-pub const EncryptedPrivateKey = struct {};
+pub const EncryptedPrivateKeyInfo = struct {
+    binary_buf: []const u8,
+    info: PBES_Info,
+    data: Slice,
+
+    pub const Slice = std.crypto.Certificate.Parsed.Slice;
+
+    pub const PasswordBasedEncryptionScheme = enum {
+        // PBES1,
+        PBES2,
+
+        pub const map = std.ComptimeStringMap(@This(), .{
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x05, 0x0D }, .PBES2 },
+        });
+    };
+
+    pub const PBES_Info = union(PasswordBasedEncryptionScheme) {
+        PBES2: struct {
+            kdf: KeyDerivationInfo,
+            scheme: EncryptionSchemeInfo,
+        },
+    };
+
+    pub const KeyDerivationFunction = enum {
+        PBKDF2,
+
+        pub const map = std.ComptimeStringMap(@This(), .{
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x05, 0x0C }, .PBKDF2 },
+        });
+    };
+
+    pub const KeyDerivationInfo = union(KeyDerivationFunction) {
+        PBKDF2: struct {
+            salt: Element,
+            iteration_count: u32,
+            key_length: ?u32,
+            prf: PsuedoRandomFunction,
+        },
+    };
+
+    /// MAC: Message Authentication Code
+    pub const PsuedoRandomFunction = enum {
+        hmacWithSHA1,
+        hmacWithSHA224,
+        hmacWithSHA256,
+        hmacWithSHA384,
+        hmacWithSHA512,
+        hmacWithSHA512_224,
+        hmacWithSHA512_256,
+
+        // digestAlgorithm ::= {rsadsi 2}
+        pub const map = std.ComptimeStringMap(@This(), .{
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x07 }, .hmacWithSHA1 },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x08 }, .hmacWithSHA224 },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x09 }, .hmacWithSHA256 },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x0A }, .hmacWithSHA384 },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x0B }, .hmacWithSHA512 },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x0C }, .hmacWithSHA512_224 },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x0D }, .hmacWithSHA512_256 },
+        });
+    };
+
+    pub const EncryptionScheme = enum {
+        desCBC,
+        des_EDE3_CBC,
+        rc2CBC,
+        rc5_CBC_PAD,
+        aes128_CBC_PAD,
+        aes192_CBC_PAD,
+        aes256_CBC_PAD,
+
+        pub const map = std.ComptimeStringMap(@This(), .{
+            .{ &[_]u8{ 0x01, 0x03, 0x0E, 0x03, 0x02, 0x07 }, .desCBC },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x03, 0x07 }, .des_EDE3_CBC },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x03, 0x02 }, .rc2CBC },
+            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x03, 0x09 }, .rc5_CBC_PAD },
+            .{ &[_]u8{ 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x02 }, .aes128_CBC_PAD },
+            .{ &[_]u8{ 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x16 }, .aes192_CBC_PAD },
+            .{ &[_]u8{ 0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x01, 0x2A }, .aes256_CBC_PAD },
+        });
+    };
+
+    pub const EncryptionSchemeInfo = union(enum) {
+        desCBC: Slice,
+        des_EDE3_CBC: Slice,
+        rc2CBC: Element,
+        rc5_CBC_PAD: Element,
+        aes128_CBC_PAD: Slice,
+        aes192_CBC_PAD: Slice,
+        aes256_CBC_PAD: Slice,
+    };
+
+    pub fn init(binary_buf: []const u8) !EncryptedPrivateKeyInfo {
+        const sequence = try Element.parse(binary_buf, 0);
+        const pbes_params_alg_seq = try Element.parse(binary_buf, sequence.slice.start);
+        const pbes_params_alg_tag = try Element.parse(binary_buf, pbes_params_alg_seq.slice.start);
+        const pbes_params_alg = try parseEnum(PasswordBasedEncryptionScheme, binary_buf, pbes_params_alg_tag);
+
+        const pbes_params_seq = try Element.parse(binary_buf, pbes_params_alg_tag.slice.end);
+
+        const info = switch (pbes_params_alg) {
+            .PBES2 => info: {
+                const kdf_seq = try Element.parse(binary_buf, pbes_params_seq.slice.start);
+                const kdf_id = try Element.parse(binary_buf, kdf_seq.slice.start);
+                const kdf_category = try parseEnum(KeyDerivationFunction, binary_buf, kdf_id);
+                const kdf = switch (kdf_category) {
+                    .PBKDF2 => key_derivation: {
+                        const kdf_param_seq = try Element.parse(binary_buf, kdf_id.slice.end);
+                        const salt = try Element.parse(binary_buf, kdf_param_seq.slice.start);
+                        const iteration_count = try Element.parse(binary_buf, salt.slice.end);
+                        const rounds = std.mem.readVarInt(u32, make_slice(binary_buf, iteration_count.slice), .big);
+
+                        // TODO: check for key length here
+                        const key_length = null;
+
+                        const prf_sequence = try Element.parse(binary_buf, iteration_count.slice.end);
+                        const prf_id = try Element.parse(binary_buf, prf_sequence.slice.start);
+                        const prf_category = try parseEnum(PsuedoRandomFunction, binary_buf, prf_id);
+
+                        break :key_derivation .{
+                            .PBKDF2 = .{
+                                .salt = salt,
+                                .iteration_count = rounds,
+                                .key_length = key_length,
+                                .prf = prf_category,
+                            },
+                        };
+                    },
+                };
+
+                const encryption_seq = try Element.parse(binary_buf, kdf_seq.slice.end);
+                const encryption_tag = try Element.parse(binary_buf, encryption_seq.slice.start);
+                const encryption_category = try parseEnum(EncryptionScheme, binary_buf, encryption_tag);
+                const scheme_data = try Element.parse(binary_buf, encryption_tag.slice.end);
+                const encryption_scheme: EncryptionSchemeInfo = switch (encryption_category) {
+                    .desCBC => .{ .desCBC = scheme_data.slice },
+                    .des_EDE3_CBC => .{ .des_EDE3_CBC = scheme_data.slice },
+                    .aes128_CBC_PAD => .{ .aes128_CBC_PAD = scheme_data.slice },
+                    .aes192_CBC_PAD => .{ .aes192_CBC_PAD = scheme_data.slice },
+                    .aes256_CBC_PAD => .{ .aes256_CBC_PAD = scheme_data.slice },
+                    .rc2CBC,
+                    .rc5_CBC_PAD,
+                    => return error.Unimplemented,
+                };
+
+                break :info .{
+                    .PBES2 = .{
+                        .kdf = kdf,
+                        .scheme = encryption_scheme,
+                    },
+                };
+            },
+            // else => return error.Unimplemented,
+        };
+
+        const encrypted_data = try Element.parse(binary_buf, pbes_params_alg_seq.slice.end);
+
+        return .{
+            .binary_buf = binary_buf,
+            .info = info,
+            .data = encrypted_data.slice,
+        };
+    }
+
+    const DecryptionKey = union(enum) {
+        PBKDF2: [32]u8,
+    };
+
+    pub fn getDecryptionKey(private_key: EncryptedPrivateKeyInfo, password: []const u8) !DecryptionKey {
+        switch (private_key.info) {
+            .PBES2 => |pbes2| {
+                switch (pbes2.kdf) {
+                    .PBKDF2 => |pbkdf2| {
+                        var decryption_key: [32]u8 = undefined;
+                        switch (pbkdf2.prf) {
+                            .hmacWithSHA1 => {
+                                const prf = std.crypto.auth.hmac.HmacSha1;
+                                try std.crypto.pwhash.pbkdf2(
+                                    &decryption_key,
+                                    password,
+                                    make_slice(private_key.binary_buf, pbkdf2.salt.slice),
+                                    pbkdf2.iteration_count,
+                                    prf,
+                                );
+                            },
+                            .hmacWithSHA224 => {
+                                const prf = std.crypto.auth.hmac.sha2.HmacSha224;
+                                try std.crypto.pwhash.pbkdf2(
+                                    &decryption_key,
+                                    password,
+                                    make_slice(private_key.binary_buf, pbkdf2.salt.slice),
+                                    pbkdf2.iteration_count,
+                                    prf,
+                                );
+                            },
+                            .hmacWithSHA256 => {
+                                const prf = std.crypto.auth.hmac.sha2.HmacSha256;
+                                try std.crypto.pwhash.pbkdf2(
+                                    &decryption_key,
+                                    password,
+                                    make_slice(private_key.binary_buf, pbkdf2.salt.slice),
+                                    pbkdf2.iteration_count,
+                                    prf,
+                                );
+                            },
+                            .hmacWithSHA384 => {
+                                const prf = std.crypto.auth.hmac.sha2.HmacSha384;
+                                try std.crypto.pwhash.pbkdf2(
+                                    &decryption_key,
+                                    password,
+                                    make_slice(private_key.binary_buf, pbkdf2.salt.slice),
+                                    pbkdf2.iteration_count,
+                                    prf,
+                                );
+                            },
+                            .hmacWithSHA512 => {
+                                const prf = std.crypto.auth.hmac.sha2.HmacSha512;
+                                try std.crypto.pwhash.pbkdf2(
+                                    &decryption_key,
+                                    password,
+                                    make_slice(private_key.binary_buf, pbkdf2.salt.slice),
+                                    pbkdf2.iteration_count,
+                                    prf,
+                                );
+                            },
+                            .hmacWithSHA512_224,
+                            .hmacWithSHA512_256,
+                            => return error.Unimplemented,
+                        }
+                        return .{ .PBKDF2 = decryption_key };
+                    },
+                }
+            },
+            // else => return error.Unimplemented,
+        }
+    }
+
+    pub fn decrypt(private_key: EncryptedPrivateKeyInfo, decryption_key: DecryptionKey, buffer: []u8) !void {
+        switch (private_key.info) {
+            .PBES2 => |pbes2| {
+                switch (pbes2.scheme) {
+                    .aes256_CBC_PAD => |iv| {
+                        const iv_slice = make_slice(private_key.binary_buf, iv);
+                        var iv_array: [16]u8 = undefined;
+                        @memcpy(&iv_array, iv_slice);
+
+                        const encrypted_data = make_slice(private_key.binary_buf, private_key.data);
+
+                        // TODO: does the decryption key vary in length?
+                        const key = decryption_key.PBKDF2;
+
+                        const Aes256 = std.crypto.core.aes.Aes256;
+                        const aes = Aes256.initDec(key);
+                        cbc(@TypeOf(aes), aes, buffer, encrypted_data, iv_array);
+                    },
+                    else => return error.Unimplemented,
+                }
+            },
+        }
+    }
+};
 
 test "retrieve private key" {
     const base64_enc_priv_key = getPEMSlice(.EncryptedPrivateKey, PEM) orelse return error.MissingEncryptedPrivateKey;
@@ -107,75 +348,10 @@ test "retrieve private key" {
     const size = try PEMDecoder.decode(buf, base64_enc_priv_key);
     const decoded = buf[0..size];
 
-    const sequence = try std.crypto.Certificate.der.Element.parse(decoded, 0);
-    const encryption_algorithm_seq = try std.crypto.Certificate.der.Element.parse(decoded, sequence.slice.start);
-    const algorithm_oid = try std.crypto.Certificate.der.Element.parse(decoded, encryption_algorithm_seq.slice.start);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.object_identifier, algorithm_oid.identifier.tag);
+    // Parse encrypted private key
+    const encrypted_private_key = try EncryptedPrivateKeyInfo.init(decoded);
 
-    const AlgorithmCategory = enum {
-        pkcs5PBES2,
-        pkcs5PBKDF2,
-        hmacWithSHA256,
-
-        pub const map = std.ComptimeStringMap(@This(), .{
-            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x05, 0x0D }, .pkcs5PBES2 },
-            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x01, 0x05, 0x0C }, .pkcs5PBKDF2 },
-            .{ &[_]u8{ 0x2A, 0x86, 0x48, 0x86, 0xF7, 0x0D, 0x02, 0x09 }, .hmacWithSHA256 },
-        });
-    };
-
-    const algorithm_category = try parseEnum(AlgorithmCategory, decoded, algorithm_oid);
-    try std.testing.expectEqual(AlgorithmCategory.pkcs5PBES2, algorithm_category);
-
-    const AlgorithmParams = union(AlgorithmCategory) {
-        pkcs5PBES2: struct {
-            salt: union(enum) {
-                specified: std.crypto.Certificate.der.Element.Slice,
-                otherSource: std.crypto.Certificate.der.Element,
-            },
-            iterationCount: usize,
-            keyLength: usize,
-            prf: std.crypto.Certificate.der.Element,
-        },
-    };
-    _ = AlgorithmParams;
-    const alg_param_sequence = try std.crypto.Certificate.der.Element.parse(decoded, algorithm_oid.slice.end);
-
-    // Calculate the private key from the password
-    const kdf_seq = try std.crypto.Certificate.der.Element.parse(decoded, alg_param_sequence.slice.start);
-    const kdf_id = try std.crypto.Certificate.der.Element.parse(decoded, kdf_seq.slice.start);
-    const kdf_category = try parseEnum(AlgorithmCategory, decoded, kdf_id);
-    try std.testing.expectEqual(AlgorithmCategory.pkcs5PBKDF2, kdf_category);
-
-    const kdf_param_seq = try std.crypto.Certificate.der.Element.parse(decoded, kdf_id.slice.end);
-    const salt = try std.crypto.Certificate.der.Element.parse(decoded, kdf_param_seq.slice.start);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, salt.identifier.tag);
-    const iteration_count = try std.crypto.Certificate.der.Element.parse(decoded, salt.slice.end);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.integer, iteration_count.identifier.tag);
-    const rounds = std.mem.readInt(u16, make_slice(decoded, iteration_count.slice)[0..2], .big);
-    try std.testing.expectEqual(@as(u16, 2048), rounds);
-    const prf_sequence = try std.crypto.Certificate.der.Element.parse(decoded, iteration_count.slice.end);
-    const prf_id = try std.crypto.Certificate.der.Element.parse(decoded, prf_sequence.slice.start);
-    const prf_category = try parseEnum(AlgorithmCategory, decoded, prf_id);
-    try std.testing.expectEqual(AlgorithmCategory.hmacWithSHA256, prf_category);
-    const prf = std.crypto.auth.hmac.sha2.HmacSha256;
-
-    var decryption_key: [32]u8 = undefined;
-    try std.crypto.pwhash.pbkdf2(&decryption_key, PEM_password, make_slice(decoded, salt.slice), rounds, prf);
-
-    // Decrypt the data using the retrieved private key
-    const encryption_seq = try std.crypto.Certificate.der.Element.parse(decoded, kdf_seq.slice.end);
-    const encryption_scheme = try std.crypto.Certificate.der.Element.parse(decoded, encryption_seq.slice.start);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.object_identifier, encryption_scheme.identifier.tag);
-    const encryption_scheme_data = try std.crypto.Certificate.der.Element.parse(decoded, encryption_scheme.slice.end);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, encryption_scheme_data.identifier.tag);
-    const iv_slice = make_slice(decoded, encryption_scheme_data.slice);
-    var iv_array: [16]u8 = undefined;
-    @memcpy(&iv_array, iv_slice);
-
-    const encrypted_data = try std.crypto.Certificate.der.Element.parse(decoded, encryption_algorithm_seq.slice.end);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, encrypted_data.identifier.tag);
-    const ed_slice = make_slice(decoded, encrypted_data.slice);
+    const ed_slice = make_slice(decoded, encrypted_private_key.data);
     try std.testing.expectEqual(@as(usize, 80), ed_slice.len);
 
     try std.testing.expectEqualSlices(u8, &[_]u8{
@@ -189,15 +365,24 @@ test "retrieve private key" {
         0x2E, 0x12, 0x12, 0xAE, 0x22, 0x78, 0xFE, 0xE1, 0x5A, 0x20,
     }, ed_slice);
 
+    try std.testing.expectEqual(EncryptedPrivateKeyInfo.PBES_Info.PBES2, encrypted_private_key.info);
+    try std.testing.expectEqual(EncryptedPrivateKeyInfo.KeyDerivationFunction.PBKDF2, encrypted_private_key.info.PBES2.kdf);
+    // try std.testing.expectEqualSlices(u8, &[_]u8{}, encrypted_private_key.info.PBES2.kdf.PBKDF2.salt);
+    try std.testing.expectEqual(@as(u32, 2048), encrypted_private_key.info.PBES2.kdf.PBKDF2.iteration_count);
+    try std.testing.expectEqual(EncryptedPrivateKeyInfo.PsuedoRandomFunction.hmacWithSHA256, encrypted_private_key.info.PBES2.kdf.PBKDF2.prf);
+
+    // Calculate decryption key from password
+    const decryption_key = try encrypted_private_key.getDecryptionKey(PEM_password);
+
+    // Allocate space for the decrypted message
     const message = try std.testing.allocator.alloc(u8, ed_slice.len);
     defer std.testing.allocator.free(message);
-    const Aes256 = std.crypto.core.aes.Aes256;
-    const aes = Aes256.initDec(decryption_key);
-    cbc(@TypeOf(aes), aes, message, ed_slice, iv_array);
 
+    // Decrypt the data
+    try encrypted_private_key.decrypt(decryption_key, message);
     try std.testing.expectEqualSlices(u8, &PRIVATE_CERT_BYTES, message[0..PRIVATE_CERT_BYTES.len]);
 
-    // Parse private key
+    // Parse private key from decrypted data
     const private_key_info = try PrivateKeyInfo.init(message);
     try std.testing.expectEqual(PrivateKeyInfo.Version.v0, private_key_info.version);
     try std.testing.expectEqual(PrivateKeyInfo.PrivKeyAlgo.X9_62_id_ecPublicKey, private_key_info.algorithm);
@@ -211,14 +396,13 @@ test "retrieve private key" {
     const octet_str = try Element.parse(private_key_slice, integer.slice.end);
     try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, octet_str.identifier.tag);
 
-    // Create signer
+    // Digitally sign a string and verify it with the public key
     const Scheme = std.crypto.sign.ecdsa.EcdsaP256Sha256;
     var private_key_real: [Scheme.SecretKey.encoded_length]u8 = undefined;
     @memcpy(&private_key_real, make_slice(private_key_slice, octet_str.slice));
     const sk = try Scheme.SecretKey.fromBytes(private_key_real);
     const kp = try Scheme.KeyPair.fromSecretKey(sk);
 
-    // Test That the signing works
     const sig = try kp.sign("hello", null);
     try std.testing.expectEqualSlices(u8, &[_]u8{
         0xC3, 0x94, 0x31, 0xDF, 0xD3, 0x85, 0xE4, 0x70, 0xE1, 0x2A, 0x50, 0x9F, 0x22, 0x53, 0x5C, 0xAA,
