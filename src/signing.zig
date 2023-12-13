@@ -95,13 +95,16 @@ test getPEMSlice {
     , private_key);
 }
 
+pub const PEMDecoder = std.base64.standard.decoderWithIgnore("\n");
+
+pub const EncryptedPrivateKey = struct {};
+
 test "retrieve private key" {
     const base64_enc_priv_key = getPEMSlice(.EncryptedPrivateKey, PEM) orelse return error.MissingEncryptedPrivateKey;
-    const decoder = std.base64.standard.decoderWithIgnore("\n");
     const upper_bound: usize = base64_enc_priv_key.len / 4 * 3;
     const buf = try std.testing.allocator.alloc(u8, upper_bound);
     defer std.testing.allocator.free(buf);
-    const size = try decoder.decode(buf, base64_enc_priv_key);
+    const size = try PEMDecoder.decode(buf, base64_enc_priv_key);
     const decoded = buf[0..size];
 
     const sequence = try std.crypto.Certificate.der.Element.parse(decoded, 0);
@@ -192,34 +195,15 @@ test "retrieve private key" {
     const aes = Aes256.initDec(decryption_key);
     cbc(@TypeOf(aes), aes, message, ed_slice, iv_array);
 
-    try std.testing.expectEqualSlices(u8, &[_]u8{
-        0x30, 0x41, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
-        0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x04, 0x27, 0x30, 0x25, 0x02, 0x01,
-        0x01, 0x04, 0x20, 0x74, 0xB1, 0x5B, 0x03, 0x81, 0x0B, 0x7D, 0xB5, 0x55, 0xAC, 0x99, 0xFB, 0x8C,
-        0x8C, 0xC5, 0x88, 0xB6, 0x27, 0xCA, 0xFF, 0x22, 0x6E, 0x24, 0x85, 0x9B, 0x5C, 0x0F, 0x84, 0x4D,
-        0x31, 0x36, 0xE6, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D, 0x0D,
-    }, message);
+    try std.testing.expectEqualSlices(u8, &PRIVATE_CERT_BYTES, message[0..PRIVATE_CERT_BYTES.len]);
 
-    const private_key_info_sequence = try Element.parse(message, 0);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.sequence, private_key_info_sequence.identifier.tag);
-    const version = try Element.parse(message, private_key_info_sequence.slice.start);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.integer, version.identifier.tag);
-    const version_number = std.mem.readInt(u8, make_slice(message, version.slice)[0..1], .big);
-    try std.testing.expectEqual(@as(u16, 0), version_number);
+    // Parse private key
+    const private_key_info = try PrivateKeyInfo.init(message);
+    try std.testing.expectEqual(PrivateKeyInfo.Version.v0, private_key_info.version);
+    try std.testing.expectEqual(PrivateKeyInfo.PrivKeyAlgo.X9_62_id_ecPublicKey, private_key_info.algorithm);
+    try std.testing.expectEqualSlices(u8, &PRIVATE_KEY_BYTES, private_key_info.privateKey());
 
-    const private_key_algorithm_seq = try Element.parse(message, version.slice.end);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.sequence, private_key_algorithm_seq.identifier.tag);
-    const private_key_algorithm = try Element.parse(message, private_key_algorithm_seq.slice.start);
-    const priv_key_algo = try std.crypto.Certificate.parseAlgorithmCategory(message, private_key_algorithm);
-    _ = priv_key_algo;
-
-    const private_key_param = try Element.parse(message, private_key_algorithm.slice.end);
-    const named_curve = try std.crypto.Certificate.parseNamedCurve(message, private_key_param);
-    _ = named_curve;
-
-    const private_key = try Element.parse(message, private_key_algorithm_seq.slice.end);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, private_key.identifier.tag);
-    const private_key_slice = make_slice(message, private_key.slice);
+    const private_key_slice = private_key_info.privateKey();
 
     const seq = try Element.parse(private_key_slice, 0);
     const integer = try Element.parse(private_key_slice, seq.slice.start);
@@ -227,12 +211,14 @@ test "retrieve private key" {
     const octet_str = try Element.parse(private_key_slice, integer.slice.end);
     try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, octet_str.identifier.tag);
 
+    // Create signer
     const Scheme = std.crypto.sign.ecdsa.EcdsaP256Sha256;
     var private_key_real: [Scheme.SecretKey.encoded_length]u8 = undefined;
     @memcpy(&private_key_real, make_slice(private_key_slice, octet_str.slice));
     const sk = try Scheme.SecretKey.fromBytes(private_key_real);
     const kp = try Scheme.KeyPair.fromSecretKey(sk);
 
+    // Test That the signing works
     const sig = try kp.sign("hello", null);
     try std.testing.expectEqualSlices(u8, &[_]u8{
         0xC3, 0x94, 0x31, 0xDF, 0xD3, 0x85, 0xE4, 0x70, 0xE1, 0x2A, 0x50, 0x9F, 0x22, 0x53, 0x5C, 0xAA,
@@ -251,39 +237,97 @@ const PEM_dec =
     \\
 ;
 
-test "unencrypted private key" {
+const PRIVATE_CERT_BYTES = [_]u8{
+    0x30, 0x41, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
+    0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x04, 0x27, 0x30, 0x25, 0x02, 0x01,
+    0x01, 0x04, 0x20, 0x74, 0xB1, 0x5B, 0x03, 0x81, 0x0B, 0x7D, 0xB5, 0x55, 0xAC, 0x99, 0xFB, 0x8C,
+    0x8C, 0xC5, 0x88, 0xB6, 0x27, 0xCA, 0xFF, 0x22, 0x6E, 0x24, 0x85, 0x9B, 0x5C, 0x0F, 0x84, 0x4D,
+    0x31, 0x36, 0xE6,
+};
+
+const PRIVATE_KEY_BYTES = [_]u8{
+    0x30, 0x25, 0x02, 0x01, 0x01, 0x04, 0x20, 0x74, 0xB1, 0x5B, 0x03, 0x81, 0x0B, 0x7D, 0xB5, 0x55,
+    0xAC, 0x99, 0xFB, 0x8C, 0x8C, 0xC5, 0x88, 0xB6, 0x27, 0xCA, 0xFF, 0x22, 0x6E, 0x24, 0x85, 0x9B,
+    0x5C, 0x0F, 0x84, 0x4D, 0x31, 0x36, 0xE6,
+};
+
+pub const PrivateKeyInfo = struct {
+    binary_buf: []const u8,
+    version: Version,
+    algorithm: PrivKeyAlgo,
+    private_key: Slice,
+
+    pub const Version = enum(u32) {
+        v0 = 0,
+    };
+
+    pub const PrivKeyAlgo = std.crypto.Certificate.Parsed.PubKeyAlgo;
+    pub const Slice = std.crypto.Certificate.Parsed.Slice;
+
+    pub fn init(binary_buf: []const u8) !PrivateKeyInfo {
+        const private_key_info_sequence = try Element.parse(binary_buf, 0);
+        std.debug.assert(std.crypto.Certificate.der.Tag.sequence == private_key_info_sequence.identifier.tag);
+
+        const Certificate = std.crypto.Certificate;
+        const Tag = Certificate.der.Tag;
+
+        const version = try Element.parse(binary_buf, private_key_info_sequence.slice.start);
+        if (version.identifier.tag != Tag.integer) return error.InvalidVersionElement;
+
+        const num_slice = make_slice(binary_buf, version.slice);
+        const version_number: Version = @enumFromInt(std.mem.readVarInt(u32, num_slice, .big));
+
+        const private_key_algorithm = try Element.parse(binary_buf, version.slice.end);
+        if (private_key_algorithm.identifier.tag != Tag.sequence) return error.InvalidAlgorithmElement;
+
+        const algo_tag_elem = try Element.parse(binary_buf, private_key_algorithm.slice.start);
+        const priv_key_algo_tag = try Certificate.parseAlgorithmCategory(binary_buf, algo_tag_elem);
+        const priv_key_algo: PrivKeyAlgo = switch (priv_key_algo_tag) {
+            .rsaEncryption => .{ .rsaEncryption = {} },
+            .X9_62_id_ecPublicKey => x9_62: {
+                const params_el = try Element.parse(binary_buf, algo_tag_elem.slice.end);
+                const named_curve = try Certificate.parseNamedCurve(binary_buf, params_el);
+                break :x9_62 .{ .X9_62_id_ecPublicKey = named_curve };
+            },
+        };
+
+        const private_key = try Element.parse(binary_buf, private_key_algorithm.slice.end);
+        if (private_key.identifier.tag != Tag.octetstring) return error.InvalidPrivateKeyElement;
+
+        return .{
+            .binary_buf = binary_buf,
+            .version = version_number,
+            .algorithm = priv_key_algo,
+            .private_key = private_key.slice,
+        };
+    }
+
+    pub fn privateKey(private_key: PrivateKeyInfo) []const u8 {
+        return make_slice(private_key.binary_buf, private_key.private_key);
+    }
+};
+
+test PrivateKeyInfo {
+    // Get base64 encoded slice
     const base64_priv_key = getPEMSlice(.PrivateKey, PEM_dec) orelse return error.MissingPrivateKey;
     try std.testing.expectEqualStrings(
         \\MEECAQAwEwYHKoZIzj0CAQYIKoZIzj0DAQcEJzAlAgEBBCB0sVsDgQt9tVWsmfuM
         \\jMWItifK/yJuJIWbXA+ETTE25g==
     , base64_priv_key);
-    const decoder = std.base64.standard.decoderWithIgnore("\n");
+
+    // Decode it
     const upper_bound: usize = base64_priv_key.len / 4 * 3;
     const buf = try std.testing.allocator.alloc(u8, upper_bound);
     defer std.testing.allocator.free(buf);
-    const size = try decoder.decode(buf, base64_priv_key);
+    const size = try PEMDecoder.decode(buf, base64_priv_key);
     const decoded = buf[0..size];
-    try std.testing.expectEqualSlices(u8, &[_]u8{
-        0x30, 0x41, 0x02, 0x01, 0x00, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01,
-        0x06, 0x08, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x04, 0x27, 0x30, 0x25, 0x02, 0x01,
-        0x01, 0x04, 0x20, 0x74, 0xB1, 0x5B, 0x03, 0x81, 0x0B, 0x7D, 0xB5, 0x55, 0xAC, 0x99, 0xFB, 0x8C,
-        0x8C, 0xC5, 0x88, 0xB6, 0x27, 0xCA, 0xFF, 0x22, 0x6E, 0x24, 0x85, 0x9B, 0x5C, 0x0F, 0x84, 0x4D,
-        0x31, 0x36, 0xE6,
-    }, decoded);
+    try std.testing.expectEqualSlices(u8, &PRIVATE_CERT_BYTES, decoded);
 
-    const private_key_info_sequence = try Element.parse(decoded, 0);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.sequence, private_key_info_sequence.identifier.tag);
-
-    const version = try Element.parse(decoded, private_key_info_sequence.slice.start);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.integer, version.identifier.tag);
-    const version_number = std.mem.readInt(u8, make_slice(decoded, version.slice)[0..1], .big);
-    try std.testing.expectEqual(@as(u16, 0), version_number);
-
-    const private_key_algorithm = try Element.parse(decoded, version.slice.end);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.sequence, private_key_algorithm.identifier.tag);
-
-    const private_key = try Element.parse(decoded, private_key_algorithm.slice.end);
-    try std.testing.expectEqual(std.crypto.Certificate.der.Tag.octetstring, private_key.identifier.tag);
+    // Parse into private key
+    const private_key = try PrivateKeyInfo.init(decoded);
+    try std.testing.expectEqual(PrivateKeyInfo.Version.v0, private_key.version);
+    try std.testing.expectEqual(PrivateKeyInfo.PrivKeyAlgo.X9_62_id_ecPublicKey, private_key.algorithm);
+    try std.testing.expectEqualSlices(u8, &PRIVATE_KEY_BYTES, private_key.privateKey());
 }
 
 /// Cipher block chaining mode.
