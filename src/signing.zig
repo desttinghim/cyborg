@@ -239,29 +239,34 @@ fn getSubjectPublicKeyInfoSlice(certificate: std.crypto.Certificate.Parsed) ![]c
     return pem.slice(buffer, pub_key_info.slice);
 }
 
-pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificates: []const std.crypto.Certificate.Parsed, private_keys: []const pem.PrivateKeyInfo) !void {
+fn calculateSizeOfSignedData(context: *SigningContext, public_certificates: []const std.crypto.Certificate.Parsed, private_keys: []const pem.PrivateKeyInfo) usize {
     std.debug.assert(public_certificates.len > 0);
-    std.debug.assert(private_keys.len > 0);
-
-    const public_key = public_certificates[0];
 
     var certificates_length: u32 = 0;
     for (public_certificates) |certificate| {
         certificates_length += 4 + @as(u32, @intCast(certificate.certificate.buffer.len));
     }
     const attributes_length = 0;
-    const digests_length: u32 = @as(u32, @intCast(4 + 4 + 4 + context.final_digest.len * private_keys.len));
+    const digests_length: u32 = @as(u32, @intCast(4 + (4 + 4 + context.final_digest.len) * private_keys.len));
     const size: u32 = 4 + 4 + digests_length + 4 + certificates_length + 4 + attributes_length;
 
-    var signed_data_chunk = try std.ArrayListUnmanaged(u8).initCapacity(ally, size + 4);
+    return size;
+}
 
-    // Reserve space for size of signer
-    _ = signed_data_chunk.addManyAsSliceAssumeCapacity(4); // signer length prefix
+fn writeSignedData(context: *SigningContext, buffer: []u8, public_certificates: []const std.crypto.Certificate.Parsed, private_keys: []const pem.PrivateKeyInfo) void {
+    std.debug.assert(buffer.len == calculateSizeOfSignedData(context, public_certificates, private_keys));
 
-    var left_to_write = signed_data_chunk.addManyAsSliceAssumeCapacity(size);
+    const digests_length: u32 = @as(u32, @intCast(4 + (4 + 4 + context.final_digest.len) * private_keys.len));
+    var certificates_length: u32 = 0;
+    for (public_certificates) |certificate| {
+        certificates_length += 4 + @as(u32, @intCast(certificate.certificate.buffer.len));
+    }
+    const attributes_length = 0;
+
+    var left_to_write = buffer[0..];
 
     // Write total size of signed data
-    std.mem.writeInt(u32, left_to_write[0..4], size, .little);
+    std.mem.writeInt(u32, left_to_write[0..4], @intCast(buffer.len), .little);
     left_to_write = left_to_write[4..];
 
     // Write size of digest sequence
@@ -309,27 +314,54 @@ pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificat
 
     // Write size of attributes length - for now, hard-coded to zero
     // TODO: attributes
-    std.mem.writeInt(u32, left_to_write[0..4], 0, .little);
+    std.mem.writeInt(u32, left_to_write[0..4], attributes_length, .little);
     left_to_write = left_to_write[4..];
 
     std.debug.assert(left_to_write.len == 0);
+}
 
+fn calculateSizeOfSignatures(context: *SigningContext, private_keys: []const pem.PrivateKeyInfo) usize {
+    var size: usize = 4; // list length prefix
+    for (private_keys) |private_key| {
+        var el_size: usize = 0;
+        el_size += 4; // signature length prefix
+        el_size += 4; // algorithm id
+        el_size += 4; // signature bytes length prefix
+        // TODO: size of signature (will vary based on algorithm id)
+
+        el_size += switch (context.hash) {
+            inline .sha256 => switch (private_key.algorithm) {
+                inline .rsaEncryption => 0, // .sha256_RSASSA_PSS,
+                inline .X9_62_id_ecPublicKey => 64, //.sha256_ECDSA,
+            },
+            inline .sha512 => switch (private_key.algorithm) {
+                inline .rsaEncryption => 0, // .sha512_RSASSA_PSS,
+                inline .X9_62_id_ecPublicKey => 64, // .sha512_ECDSA,
+            },
+        };
+        size += el_size;
+
+        if (context.hash == .sha256 and private_key.algorithm == .X9_62_id_ecPublicKey)
+            std.debug.assert(el_size == 76);
+    }
+    return size;
+}
+
+fn writeSignatures(context: *SigningContext, buffer: []u8, signed_data: []const u8, private_keys: []const pem.PrivateKeyInfo) !void {
     // Reserve space for the length of the signature list
-    const signature_length_idx = signed_data_chunk.items.len;
-    std.mem.writeInt(u32, (try signed_data_chunk.addManyAsSlice(ally, 4))[0..4], std.math.maxInt(u32), .little);
+    // const signature_length_idx = signer_bytes.items.len;
+    std.mem.writeInt(u32, buffer[0..4], @intCast(buffer.len - 4), .little);
+
+    var current_slice = buffer[4..];
 
     // Create signatures with algorithm over signed data
     for (private_keys) |private_key| {
+        // TODO: move this to a function
         const private_key_slice = private_key.privateKey();
         const der = try Element.parse(private_key_slice, 0);
         const der2 = try Element.parse(private_key_slice, der.slice.start);
         const der3 = try Element.parse(private_key_slice, der2.slice.end);
-        // try std.testing.expectEqual(std.crypto.Certificate.der.Tag.sequence, der.identifier.tag);
-        // try std.testing.expectEqual(@as(usize, 2), der.slice.start);
-        // try std.testing.expectEqual(@as(usize, 0), der.slice.end);
         const pk_slice = private_key_slice[der3.slice.start..der3.slice.end];
-
-        const signed_data_slice = signed_data_chunk.items[4..][0..size];
 
         const algorithm: SigningEntry.Signer.Algorithm = switch (context.hash) {
             inline .sha256 => switch (private_key.algorithm) {
@@ -355,7 +387,7 @@ pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificat
                             const sk = try Scheme.SecretKey.fromBytes(private_key_real);
                             const kp = try Scheme.KeyPair.fromSecretKey(sk);
 
-                            const sig = try kp.sign(signed_data_slice, null);
+                            const sig = try kp.sign(signed_data, null);
                             break :sig &sig.toBytes();
                         },
                     },
@@ -371,7 +403,7 @@ pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificat
                             const sk = try Scheme.SecretKey.fromBytes(private_key_real);
                             const kp = try Scheme.KeyPair.fromSecretKey(sk);
 
-                            const sig = try kp.sign(signed_data_slice, null);
+                            const sig = try kp.sign(signed_data, null);
                             break :sig &sig.toBytes();
                         },
                     },
@@ -382,32 +414,58 @@ pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificat
         // Digitally sign a string and verify it with the public key
 
         // TODO: noise
-
-        const signature_length = signature.len + 4 + 4;
-        const sig_slice = try signed_data_chunk.addManyAsSlice(ally, signature_length + 4);
+        std.debug.assert(signature.len == 64);
+        const signature_length = signature.len + 4 + 4 + 4;
+        const sig_slice = current_slice[0..signature_length];
+        current_slice = current_slice[signature_length..];
 
         // Write out signature over signed data
-        std.mem.writeInt(u32, sig_slice[0..][0..4], @intCast(signature_length), .little);
+        std.mem.writeInt(u32, sig_slice[0..][0..4], @intCast(signature_length - 4), .little);
         std.mem.writeInt(u32, sig_slice[4..][0..4], @intFromEnum(algorithm), .little);
         std.mem.writeInt(u32, sig_slice[8..][0..4], @intCast(signature.len), .little);
-        @memcpy(sig_slice[12..][0..], signature);
+        @memcpy(sig_slice[12..][0..signature.len], signature);
     }
 
-    std.debug.assert(std.mem.readInt(u32, signed_data_chunk.items[signature_length_idx..][0..4], .little) == std.math.maxInt(u32));
-    std.mem.writeInt(u32, signed_data_chunk.items[signature_length_idx..][0..4], @intCast(signed_data_chunk.items.len - signature_length_idx - 4), .little);
-    std.debug.assert(std.mem.readInt(u32, signed_data_chunk.items[signature_length_idx..][0..4], .little) != std.math.maxInt(u32));
+    std.debug.assert(current_slice.len == 0);
+
+    // std.debug.assert(std.mem.readInt(u32, signer_bytes.items[signature_length_idx..][0..4], .little) == std.math.maxInt(u32));
+    // std.mem.writeInt(u32, signer_bytes.items[signature_length_idx..][0..4], @intCast(signer_bytes.items.len - signature_length_idx - 4), .little);
+    // std.debug.assert(std.mem.readInt(u32, signer_bytes.items[signature_length_idx..][0..4], .little) != std.math.maxInt(u32));
+}
+
+pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificates: []const std.crypto.Certificate.Parsed, private_keys: []const pem.PrivateKeyInfo) !void {
+    std.debug.assert(public_certificates.len > 0);
+    std.debug.assert(private_keys.len > 0);
+
+    const public_key = public_certificates[0];
+
+    const size = calculateSizeOfSignedData(context, public_certificates, private_keys);
+
+    var signer_bytes = try std.ArrayListUnmanaged(u8).initCapacity(ally, size + 4);
+
+    // Reserve space for size of signer
+    _ = signer_bytes.addManyAsSliceAssumeCapacity(4); // signer length prefix
+
+    const signed_data_chunk = signer_bytes.addManyAsSliceAssumeCapacity(size);
+
+    writeSignedData(context, signed_data_chunk, public_certificates, private_keys);
+
+    const signatures_size = calculateSizeOfSignatures(context, private_keys);
+    const signatures_slice = try signer_bytes.addManyAsSlice(ally, signatures_size);
+
+    try writeSignatures(context, signatures_slice, signed_data_chunk, private_keys);
 
     // Append public key from first x509 certificate
     const pub_key = try getSubjectPublicKeyInfoSlice(public_key);
     std.debug.assert(pub_key.len != 0);
-    const pk_slice = try signed_data_chunk.addManyAsSlice(ally, pub_key.len + 4);
+    const pk_slice = try signer_bytes.addManyAsSlice(ally, pub_key.len + 4);
     std.mem.writeInt(u32, pk_slice[0..][0..4], @intCast(pub_key.len), .little);
     @memcpy(pk_slice[4..], pub_key);
 
     // Write length of signer chunk to start
-    std.mem.writeInt(u32, signed_data_chunk.items[0..4], @intCast(signed_data_chunk.items.len - 8), .little);
+    std.mem.writeInt(u32, signer_bytes.items[0..4], @intCast(signer_bytes.items.len - 4), .little);
 
-    try context.v2_signers.append(ally, try signed_data_chunk.toOwnedSlice(ally));
+    try context.v2_signers.append(ally, try signer_bytes.toOwnedSlice(ally));
 }
 
 pub fn verify(ally: std.mem.Allocator, apk_contents: []u8) !void {

@@ -220,5 +220,5 @@ test "sign apk" {
     const cd_end_offset = const_apk_data.len - apk.offsets.central_directory_offset;
     try std.testing.expectEqualSlices(u8, "APK Sig Block 42", signed_apk[signed_apk.len - cd_end_offset - 16 ..][0..16]);
 
-    // try verify(std.testing.allocator, signed_apk);
+    try signing.verify(std.testing.allocator, signed_apk);
 }
