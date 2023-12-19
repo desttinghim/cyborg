@@ -22,6 +22,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
+    main_tests.addModule("archive", archive_mod);
 
     const run_tests = b.addRunArtifact(main_tests);
 

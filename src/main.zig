@@ -10,6 +10,7 @@ pub const dexter = @import("dexter.zig");
 
 comptime {
     _ = dexter;
+    _ = signing;
 }
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -229,25 +230,63 @@ pub fn readZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
 }
 
 pub fn signZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
-    _ = stdout;
-    const filepath = try std.fs.realpathAlloc(alloc, args[2]);
+    const pempath = try std.fs.realpathAlloc(alloc, args[2]);
+    const filepath = try std.fs.realpathAlloc(alloc, args[3]);
+    const outpath = args[4];
+
+    const pemfile = try std.fs.openFileAbsolute(pempath, .{});
+    const pem = try pemfile.readToEndAlloc(alloc, std.math.maxInt(u32));
+
+    // Locate private + public certificate
+    const base64_enc_priv_key = signing.getPEMSlice(.EncryptedPrivateKey, pem) orelse return error.MissingEncryptedPrivateKey;
+    const base64_enc_pub_key = signing.getPEMSlice(.Certificate, pem) orelse return error.MissingPublicKey;
+
+    // Decode and decrypt private key
+    const priv_key_upper_bound: usize = base64_enc_priv_key.len / 4 * 3;
+    const priv_key_buf = try alloc.alloc(u8, priv_key_upper_bound);
+    defer alloc.free(priv_key_buf);
+    const priv_key_size = try signing.PEMDecoder.decode(priv_key_buf, base64_enc_priv_key);
+    const priv_key_decoded = priv_key_buf[0..priv_key_size];
+
+    const encrypted_private_key = try signing.EncryptedPrivateKeyInfo.init(priv_key_decoded);
+    const private_key = try encrypted_private_key.decryptAlloc(alloc, args[5]);
+    defer alloc.free(private_key.binary_buf);
+
+    // Decode public key
+    const pub_key_upper_bound: usize = base64_enc_pub_key.len / 4 * 3;
+    const pub_key_buf = try alloc.alloc(u8, pub_key_upper_bound);
+    defer alloc.free(pub_key_buf);
+    const pub_key_size = try signing.PEMDecoder.decode(pub_key_buf, base64_enc_pub_key);
+    const pub_key_decoded = pub_key_buf[0..pub_key_size];
+
+    const certificate = std.crypto.Certificate{ .buffer = pub_key_decoded, .index = 0 };
+    const parsed = try certificate.parse();
+
+    // Open APK
     const dirpath = std.fs.path.dirname(filepath) orelse return error.NonexistentDirectory;
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
     // Read zip archive into memory
     const unsigned_apk = try file.reader().readAllAlloc(alloc, std.math.maxInt(u64));
+    defer alloc.free(unsigned_apk);
 
-    const fbs = std.io.fixedBufferStream(unsigned_apk);
-    var stream_source = .{ .buffer = fbs };
-    var archive_reader = archive.formats.zip.reader.ArchiveReader.init(alloc, &stream_source);
+    var signing_context = try signing.getV2SigningContext(alloc, unsigned_apk, .sha256);
 
-    try archive_reader.load();
+    try signing.sign(&signing_context, alloc, &.{parsed}, &.{private_key});
+
+    const signed_apk = try signing_context.writeSignedAPKAlloc(alloc);
+    defer alloc.free(signed_apk);
+
+    const outfile = try std.fs.cwd().createFile(outpath, .{});
+    defer outfile.close();
+    try outfile.writeAll(signed_apk);
+    try outfile.sync();
+
+    try stdout.writer().print("Wrote signed file to {s}\n", .{outpath});
 
     // TODO: parse signing options
-
     // TODO: Sign with specified options
-
     // TODO: Write new zip file with signing block added
 }
 
