@@ -239,24 +239,50 @@ fn getSubjectPublicKeyInfoSlice(certificate: std.crypto.Certificate.Parsed) ![]c
     return pem.slice(buffer, pub_key_info.slice);
 }
 
-fn calculateSizeOfSignedData(context: *SigningContext, public_certificates: []const std.crypto.Certificate.Parsed, private_keys: []const pem.PrivateKeyInfo) usize {
+/// Returns the calculated size of the signed data.
+/// - Length of the signed data: 4 bytes
+/// - Length of the digest list: 4 bytes
+/// - Each digest:
+///   - Length of the digest item: 4 bytes
+///   - signature algorithm id for the digest: 4 bytes
+///   - Length of the digest: 4 bytes
+///   - Digest: 32 or 64 bytes, depending on hash
+/// - Length of the certificate list: 4 bytes
+/// - Each certificate:
+///   - Length of the certificate: 4 bytes
+///   - Certificate: variable size
+/// - Length of attribute list: 4 bytes
+/// - Each attribute:
+///   - Length of attribute: 4 bytes
+///   - ID: 4 bytes
+///   - Value: variable length
+fn calculateSizeOfSignedData(final_digest: []const u8, public_certificates: []const std.crypto.Certificate.Parsed, private_keys: []const pem.PrivateKeyInfo) usize {
     std.debug.assert(public_certificates.len > 0);
 
+    const data_length = 4;
+    const digest_list_length = 4;
+    const digest_item_length = 4;
+    const digest_algo = 4;
+    const digest_length = 4;
+    const digests_length: u32 = @as(u32, @intCast((digest_item_length + digest_algo + digest_length + final_digest.len) * private_keys.len));
+
+    const certificate_list_length = 4;
     var certificates_length: u32 = 0;
     for (public_certificates) |certificate| {
-        certificates_length += 4 + @as(u32, @intCast(certificate.certificate.buffer.len));
+        const certificate_length = 4;
+        certificates_length += certificate_length + @as(u32, @intCast(certificate.certificate.buffer.len));
     }
-    const attributes_length = 0;
-    const digests_length: u32 = @as(u32, @intCast(4 + (4 + 4 + context.final_digest.len) * private_keys.len));
-    const size: u32 = 4 + 4 + digests_length + 4 + certificates_length + 4 + attributes_length;
 
-    return size;
+    const attributes_list_length = 4;
+    const attributes_length = 0;
+
+    return data_length + digest_list_length + digests_length + certificate_list_length + certificates_length + attributes_list_length + attributes_length;
 }
 
-fn writeSignedData(context: *SigningContext, buffer: []u8, public_certificates: []const std.crypto.Certificate.Parsed, private_keys: []const pem.PrivateKeyInfo) void {
-    std.debug.assert(buffer.len == calculateSizeOfSignedData(context, public_certificates, private_keys));
+fn writeSignedData(hash: Hash, final_digest: []const u8, buffer: []u8, public_certificates: []const std.crypto.Certificate.Parsed, private_keys: []const pem.PrivateKeyInfo) void {
+    std.debug.assert(buffer.len == calculateSizeOfSignedData(final_digest, public_certificates, private_keys));
 
-    const digests_length: u32 = @as(u32, @intCast(4 + (4 + 4 + context.final_digest.len) * private_keys.len));
+    const digests_length: u32 = @as(u32, @intCast((4 + 4 + 4 + final_digest.len) * private_keys.len));
     var certificates_length: u32 = 0;
     for (public_certificates) |certificate| {
         certificates_length += 4 + @as(u32, @intCast(certificate.certificate.buffer.len));
@@ -266,7 +292,7 @@ fn writeSignedData(context: *SigningContext, buffer: []u8, public_certificates: 
     var left_to_write = buffer[0..];
 
     // Write total size of signed data
-    std.mem.writeInt(u32, left_to_write[0..4], @intCast(buffer.len), .little);
+    std.mem.writeInt(u32, left_to_write[0..4], @intCast(buffer.len - 4), .little);
     left_to_write = left_to_write[4..];
 
     // Write size of digest sequence
@@ -275,10 +301,10 @@ fn writeSignedData(context: *SigningContext, buffer: []u8, public_certificates: 
 
     for (private_keys) |private_key| {
         // Write length
-        std.mem.writeInt(u32, left_to_write[0..4], @intCast(context.final_digest.len + 4), .little);
+        std.mem.writeInt(u32, left_to_write[0..4], @intCast(final_digest.len + 8), .little);
         left_to_write = left_to_write[4..];
 
-        const algorithm: SigningEntry.Signer.Algorithm = switch (context.hash) {
+        const algorithm: SigningEntry.Signer.Algorithm = switch (hash) {
             inline .sha256 => switch (private_key.algorithm) {
                 inline .rsaEncryption => .sha256_RSASSA_PSS,
                 inline .X9_62_id_ecPublicKey => .sha256_ECDSA,
@@ -292,11 +318,11 @@ fn writeSignedData(context: *SigningContext, buffer: []u8, public_certificates: 
         std.mem.writeInt(u32, left_to_write[0..4], @intFromEnum(algorithm), .little);
         left_to_write = left_to_write[4..];
 
-        std.mem.writeInt(u32, left_to_write[0..4], @intCast(context.final_digest.len), .little);
+        std.mem.writeInt(u32, left_to_write[0..4], @intCast(final_digest.len), .little);
         left_to_write = left_to_write[4..];
 
-        @memcpy(left_to_write[0..context.final_digest.len], context.final_digest);
-        left_to_write = left_to_write[context.final_digest.len..];
+        @memcpy(left_to_write[0..final_digest.len], final_digest);
+        left_to_write = left_to_write[final_digest.len..];
     }
 
     // Write size of certificates sequence
@@ -320,7 +346,40 @@ fn writeSignedData(context: *SigningContext, buffer: []u8, public_certificates: 
     std.debug.assert(left_to_write.len == 0);
 }
 
-fn calculateSizeOfSignatures(context: *SigningContext, private_keys: []const pem.PrivateKeyInfo) usize {
+test writeSignedData {
+    const hash = std.crypto.hash.sha2.Sha256;
+
+    try std.testing.expectEqual(@as(usize, 32), hash.digest_length);
+
+    const ally = std.testing.allocator;
+    const digest = [_]u8{0} ** hash.digest_length;
+
+    const cert_bytes = try pem.decodeCertificateAlloc(.Certificate, ally, test_file.PEM) orelse unreachable;
+    defer ally.free(cert_bytes);
+
+    const enc_key_bytes = try pem.decodeCertificateAlloc(.EncryptedPrivateKey, ally, test_file.PEM) orelse unreachable;
+    defer ally.free(enc_key_bytes);
+
+    const enc_key = try pem.EncryptedPrivateKeyInfo.init(enc_key_bytes);
+    const key = try enc_key.decryptAlloc(ally, test_file.PEM_password);
+    defer ally.free(key.binary_buf);
+
+    const unparsed_cert = std.crypto.Certificate{ .buffer = cert_bytes, .index = 0 };
+    const cert = try unparsed_cert.parse();
+
+    const size = calculateSizeOfSignedData(&digest, &.{cert}, &.{key});
+
+    try std.testing.expectEqual(@as(usize, 367), size);
+
+    const buffer = try ally.alloc(u8, size);
+    defer ally.free(buffer);
+
+    writeSignedData(.sha256, &digest, buffer, &.{cert}, &.{key});
+
+    // try std.testing.expectEqualSlices(u8, &[_]u8{}, buffer);
+}
+
+fn calculateSizeOfSignatures(hash: Hash, private_keys: []const pem.PrivateKeyInfo) usize {
     var size: usize = 4; // list length prefix
     for (private_keys) |private_key| {
         var el_size: usize = 0;
@@ -329,7 +388,7 @@ fn calculateSizeOfSignatures(context: *SigningContext, private_keys: []const pem
         el_size += 4; // signature bytes length prefix
         // TODO: size of signature (will vary based on algorithm id)
 
-        el_size += switch (context.hash) {
+        el_size += switch (hash) {
             inline .sha256 => switch (private_key.algorithm) {
                 inline .rsaEncryption => 0, // .sha256_RSASSA_PSS,
                 inline .X9_62_id_ecPublicKey => 64, //.sha256_ECDSA,
@@ -341,13 +400,13 @@ fn calculateSizeOfSignatures(context: *SigningContext, private_keys: []const pem
         };
         size += el_size;
 
-        if (context.hash == .sha256 and private_key.algorithm == .X9_62_id_ecPublicKey)
+        if (hash == .sha256 and private_key.algorithm == .X9_62_id_ecPublicKey)
             std.debug.assert(el_size == 76);
     }
     return size;
 }
 
-fn writeSignatures(context: *SigningContext, buffer: []u8, signed_data: []const u8, private_keys: []const pem.PrivateKeyInfo) !void {
+fn writeSignatures(hash: Hash, buffer: []u8, signed_data: []const u8, private_keys: []const pem.PrivateKeyInfo) !void {
     // Reserve space for the length of the signature list
     // const signature_length_idx = signer_bytes.items.len;
     std.mem.writeInt(u32, buffer[0..4], @intCast(buffer.len - 4), .little);
@@ -363,7 +422,7 @@ fn writeSignatures(context: *SigningContext, buffer: []u8, signed_data: []const 
         const der3 = try Element.parse(private_key_slice, der2.slice.end);
         const pk_slice = private_key_slice[der3.slice.start..der3.slice.end];
 
-        const algorithm: SigningEntry.Signer.Algorithm = switch (context.hash) {
+        const algorithm: SigningEntry.Signer.Algorithm = switch (hash) {
             inline .sha256 => switch (private_key.algorithm) {
                 inline .rsaEncryption => .sha256_RSASSA_PSS,
                 inline .X9_62_id_ecPublicKey => .sha256_ECDSA,
@@ -375,7 +434,7 @@ fn writeSignatures(context: *SigningContext, buffer: []u8, signed_data: []const 
         };
 
         const signature = sig: {
-            switch (context.hash) {
+            switch (hash) {
                 inline .sha256 => switch (private_key.algorithm) {
                     inline .rsaEncryption => unreachable,
                     inline .X9_62_id_ecPublicKey => |named_curve| switch (named_curve) {
@@ -439,7 +498,7 @@ pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificat
 
     const public_key = public_certificates[0];
 
-    const size = calculateSizeOfSignedData(context, public_certificates, private_keys);
+    const size = calculateSizeOfSignedData(context.final_digest, public_certificates, private_keys);
 
     var signer_bytes = try std.ArrayListUnmanaged(u8).initCapacity(ally, size + 4);
 
@@ -448,12 +507,12 @@ pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificat
 
     const signed_data_chunk = signer_bytes.addManyAsSliceAssumeCapacity(size);
 
-    writeSignedData(context, signed_data_chunk, public_certificates, private_keys);
+    writeSignedData(context.hash, context.final_digest, signed_data_chunk, public_certificates, private_keys);
 
-    const signatures_size = calculateSizeOfSignatures(context, private_keys);
+    const signatures_size = calculateSizeOfSignatures(context.hash, private_keys);
     const signatures_slice = try signer_bytes.addManyAsSlice(ally, signatures_size);
 
-    try writeSignatures(context, signatures_slice, signed_data_chunk, private_keys);
+    try writeSignatures(context.hash, signatures_slice, signed_data_chunk, private_keys);
 
     // Append public key from first x509 certificate
     const pub_key = try getSubjectPublicKeyInfoSlice(public_key);
@@ -1144,3 +1203,4 @@ pub fn get_length_prefixed_slice_iter(slice: []const u8) !SliceIter {
 const std = @import("std");
 const archive = @import("archive");
 const Element = std.crypto.Certificate.der.Element;
+const test_file = @import("signing/test.zig");
