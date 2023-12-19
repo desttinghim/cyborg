@@ -237,28 +237,19 @@ pub fn signZip(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File
     const pemfile = try std.fs.openFileAbsolute(pempath, .{});
     const pem = try pemfile.readToEndAlloc(alloc, std.math.maxInt(u32));
 
-    // Locate private + public certificate
-    const base64_enc_priv_key = signing.getPEMSlice(.EncryptedPrivateKey, pem) orelse return error.MissingEncryptedPrivateKey;
-    const base64_enc_pub_key = signing.getPEMSlice(.Certificate, pem) orelse return error.MissingPublicKey;
+    // Locate and decode private + public certificate
+    const priv_key_decoded = try signing.pem.decodeCertificateAlloc(.EncryptedPrivateKey, alloc, pem) orelse return error.MissingEncryptedPrivateKey;
+    defer alloc.free(priv_key_decoded);
 
-    // Decode and decrypt private key
-    const priv_key_upper_bound: usize = base64_enc_priv_key.len / 4 * 3;
-    const priv_key_buf = try alloc.alloc(u8, priv_key_upper_bound);
-    defer alloc.free(priv_key_buf);
-    const priv_key_size = try signing.PEMDecoder.decode(priv_key_buf, base64_enc_priv_key);
-    const priv_key_decoded = priv_key_buf[0..priv_key_size];
+    const pub_key_decoded = try signing.pem.decodeCertificateAlloc(.Certificate, alloc, pem) orelse return error.MissingPublicKey;
+    defer alloc.free(pub_key_decoded);
 
-    const encrypted_private_key = try signing.EncryptedPrivateKeyInfo.init(priv_key_decoded);
+    // Decrypt private key
+    const encrypted_private_key = try signing.pem.EncryptedPrivateKeyInfo.init(priv_key_decoded);
     const private_key = try encrypted_private_key.decryptAlloc(alloc, args[5]);
     defer alloc.free(private_key.binary_buf);
 
-    // Decode public key
-    const pub_key_upper_bound: usize = base64_enc_pub_key.len / 4 * 3;
-    const pub_key_buf = try alloc.alloc(u8, pub_key_upper_bound);
-    defer alloc.free(pub_key_buf);
-    const pub_key_size = try signing.PEMDecoder.decode(pub_key_buf, base64_enc_pub_key);
-    const pub_key_decoded = pub_key_buf[0..pub_key_size];
-
+    // Parse public key
     const certificate = std.crypto.Certificate{ .buffer = pub_key_decoded, .index = 0 };
     const parsed = try certificate.parse();
 
