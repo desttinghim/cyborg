@@ -220,5 +220,7 @@ test "sign apk" {
     const cd_end_offset = const_apk_data.len - apk.offsets.central_directory_offset;
     try std.testing.expectEqualSlices(u8, "APK Sig Block 42", signed_apk[signed_apk.len - cd_end_offset - 16 ..][0..16]);
 
-    // try signing.verify(std.testing.allocator, signed_apk);
+    // FIXME: the generated APK fails to verify - something is wrong in the construction of the fields.
+    // I am stumped regarding the cause, even after pulling up the generated file in a hex viewer.
+    try signing.verify(std.testing.allocator, signed_apk);
 }

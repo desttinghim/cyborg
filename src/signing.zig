@@ -189,10 +189,16 @@ pub const SigningContext = struct {
         std.debug.assert(context.v2_signers.items.len != 0);
         var v2_total_length: usize = 0;
         for (context.v2_signers.items) |signer| {
-            v2_total_length = signer.len;
+            v2_total_length += signer.len;
         }
 
-        const signing_block_length = 8 + (8 + 4 + 4 + v2_total_length) + 8 + 16;
+        const signing_block_length_prefix_size = 8;
+        const signing_block_tag_size = 4;
+        const magic_string_size = 16;
+        const signing_block_length =
+            signing_block_length_prefix_size +
+            (signing_block_length_prefix_size + signing_block_tag_size + v2_total_length) +
+            signing_block_length_prefix_size + magic_string_size;
         const signed_apk_length = context.offsets.apk_contents.len + signing_block_length;
         const signed_apk = try ally.alloc(u8, signed_apk_length);
 
@@ -213,12 +219,14 @@ pub const SigningContext = struct {
 
         const signing_block = signed_apk[context.offsets.signing_block_offset..][0..signing_block_length];
 
+        std.debug.assert(signing_block.len == signing_block_length);
+
         std.mem.writeInt(u64, signing_block[0..][0..8], signing_block_length - 8, .little); // size of block
         std.mem.writeInt(u64, signing_block[8..][0..8], v2_total_length + 4, .little); // length of v2 block
         std.mem.writeInt(u32, signing_block[16..][0..4], @intFromEnum(SigningEntry.Tag.V2), .little); // v2 block id
-        std.mem.writeInt(u32, signing_block[20..][0..4], @intCast(v2_total_length), .little); // v2 total length
+        // std.mem.writeInt(u32, signing_block[20..][0..4], @intCast(v2_total_length), .little); // v2 total length
 
-        var current_index: usize = 24;
+        var current_index: usize = 20;
         for (context.v2_signers.items) |signer| {
             @memcpy(signing_block[current_index..][0..signer.len], signer);
             current_index += signer.len;
@@ -232,12 +240,6 @@ pub const SigningContext = struct {
         return signed_apk;
     }
 };
-
-fn getSubjectPublicKeyInfoSlice(certificate: std.crypto.Certificate.Parsed) ![]const u8 {
-    const buffer = certificate.certificate.buffer;
-    const pub_key_info = try Element.parse(buffer, certificate.subject_slice.end);
-    return pem.slice(buffer, pub_key_info.slice);
-}
 
 /// Returns the calculated size of the signed data.
 /// - Length of the signed data: 4 bytes
@@ -408,7 +410,6 @@ fn calculateSizeOfSignatures(hash: Hash, private_keys: []const pem.PrivateKeyInf
 
 fn writeSignatures(hash: Hash, buffer: []u8, signed_data: []const u8, private_keys: []const pem.PrivateKeyInfo) !void {
     // Reserve space for the length of the signature list
-    // const signature_length_idx = signer_bytes.items.len;
     std.mem.writeInt(u32, buffer[0..4], @intCast(buffer.len - 4), .little);
 
     var current_slice = buffer[4..];
@@ -492,39 +493,121 @@ fn writeSignatures(hash: Hash, buffer: []u8, signed_data: []const u8, private_ke
     // std.debug.assert(std.mem.readInt(u32, signer_bytes.items[signature_length_idx..][0..4], .little) != std.math.maxInt(u32));
 }
 
+test writeSignatures {
+    // Create signed data chunk
+    const hash = std.crypto.hash.sha2.Sha256;
+
+    const ally = std.testing.allocator;
+    const digest = [_]u8{0} ** hash.digest_length;
+
+    const cert_bytes = try pem.decodeCertificateAlloc(.Certificate, ally, test_file.PEM) orelse unreachable;
+    defer ally.free(cert_bytes);
+
+    const enc_key_bytes = try pem.decodeCertificateAlloc(.EncryptedPrivateKey, ally, test_file.PEM) orelse unreachable;
+    defer ally.free(enc_key_bytes);
+
+    const enc_key = try pem.EncryptedPrivateKeyInfo.init(enc_key_bytes);
+    const key = try enc_key.decryptAlloc(ally, test_file.PEM_password);
+    defer ally.free(key.binary_buf);
+
+    const unparsed_cert = std.crypto.Certificate{ .buffer = cert_bytes, .index = 0 };
+    const cert = try unparsed_cert.parse();
+
+    const signed_data_size = calculateSizeOfSignedData(&digest, &.{cert}, &.{key});
+
+    const signed_data = try ally.alloc(u8, signed_data_size);
+    defer ally.free(signed_data);
+
+    writeSignedData(.sha256, &digest, signed_data, &.{cert}, &.{key});
+
+    // Write signatures
+    const size = calculateSizeOfSignatures(.sha256, &.{key});
+    const signatures_bytes = try ally.alloc(u8, size);
+    defer ally.free(signatures_bytes);
+
+    try writeSignatures(.sha256, signatures_bytes, signed_data, &.{key});
+
+    const signatures = try parse_v2_signatures(ally, signatures_bytes);
+    defer ally.free(signatures);
+
+    try std.testing.expectEqual(@as(usize, 1), signatures.len);
+    try std.testing.expectEqual(SigningEntry.Signer.Algorithm.sha256_ECDSA, signatures[0].algorithm);
+}
+
 pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificates: []const std.crypto.Certificate.Parsed, private_keys: []const pem.PrivateKeyInfo) !void {
     std.debug.assert(public_certificates.len > 0);
     std.debug.assert(private_keys.len > 0);
 
     const public_key = public_certificates[0];
 
-    const size = calculateSizeOfSignedData(context.final_digest, public_certificates, private_keys);
+    const spki = try pem.SubjectPublicKeyInfo.fromCertificate(public_key);
 
-    var signer_bytes = try std.ArrayListUnmanaged(u8).initCapacity(ally, size + 4);
+    const size = calculateSizeOfSignedData(context.final_digest, public_certificates, private_keys);
+    const total_capacity =
+        calculateSizeOfSignedData(context.final_digest, public_certificates, private_keys) +
+        calculateSizeOfSignatures(context.hash, private_keys) +
+        4 + spki.buffer.len;
+
+    var signer_bytes = try std.ArrayListUnmanaged(u8).initCapacity(ally, total_capacity + 4);
 
     // Reserve space for size of signer
-    _ = signer_bytes.addManyAsSliceAssumeCapacity(4); // signer length prefix
+    const length_prefix = signer_bytes.addManyAsSliceAssumeCapacity(4); // signer length prefix
+    // Write length of signer chunk to start
+    std.mem.writeInt(u32, length_prefix[0..4], @intCast(total_capacity), .little);
 
     const signed_data_chunk = signer_bytes.addManyAsSliceAssumeCapacity(size);
 
     writeSignedData(context.hash, context.final_digest, signed_data_chunk, public_certificates, private_keys);
 
     const signatures_size = calculateSizeOfSignatures(context.hash, private_keys);
-    const signatures_slice = try signer_bytes.addManyAsSlice(ally, signatures_size);
+    const signatures_slice = signer_bytes.addManyAsSliceAssumeCapacity(signatures_size);
 
     try writeSignatures(context.hash, signatures_slice, signed_data_chunk, private_keys);
 
-    // Append public key from first x509 certificate
-    const pub_key = try getSubjectPublicKeyInfoSlice(public_key);
-    std.debug.assert(pub_key.len != 0);
-    const pk_slice = try signer_bytes.addManyAsSlice(ally, pub_key.len + 4);
-    std.mem.writeInt(u32, pk_slice[0..][0..4], @intCast(pub_key.len), .little);
-    @memcpy(pk_slice[4..], pub_key);
-
-    // Write length of signer chunk to start
-    std.mem.writeInt(u32, signer_bytes.items[0..4], @intCast(signer_bytes.items.len - 4), .little);
+    // Append SubjectPublicKeyInfo from first x509 certificate
+    const pk_slice = signer_bytes.addManyAsSliceAssumeCapacity(spki.buffer.len + 4);
+    std.mem.writeInt(u32, pk_slice[0..][0..4], @intCast(spki.buffer.len), .little);
+    @memcpy(pk_slice[4..], spki.buffer);
 
     try context.v2_signers.append(ally, try signer_bytes.toOwnedSlice(ally));
+}
+
+test sign {
+    const ally = std.testing.allocator;
+
+    const cert_bytes = try pem.decodeCertificateAlloc(.Certificate, ally, test_file.PEM) orelse unreachable;
+    defer ally.free(cert_bytes);
+
+    const enc_key_bytes = try pem.decodeCertificateAlloc(.EncryptedPrivateKey, ally, test_file.PEM) orelse unreachable;
+    defer ally.free(enc_key_bytes);
+
+    const enc_key = try pem.EncryptedPrivateKeyInfo.init(enc_key_bytes);
+    const key = try enc_key.decryptAlloc(ally, test_file.PEM_password);
+    defer ally.free(key.binary_buf);
+
+    const unparsed_cert = std.crypto.Certificate{ .buffer = cert_bytes, .index = 0 };
+    const cert = try unparsed_cert.parse();
+
+    // Open APK
+    const const_apk_data = @embedFile("./signing/app-unsigned.apk");
+    const apk_data = try std.testing.allocator.dupe(u8, const_apk_data);
+    defer std.testing.allocator.free(apk_data);
+    var context = try getV2SigningContext(std.testing.allocator, apk_data, .sha256);
+    defer context.deinit(std.testing.allocator);
+
+    try sign(&context, ally, &.{cert}, &.{key});
+
+    const slices = try parse_v2_signer(context.v2_signers.items[0]);
+    try std.testing.expectEqualSlices(u8, &[_]u8{
+        0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2A, 0x86, 0x48, 0xCE, 0x3D, 0x02, 0x01, 0x06, 0x08, 0x2A,
+        0x86, 0x48, 0xCE, 0x3D, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00, 0x04, 0x62, 0x39, 0x8B, 0x23, 0xE4,
+        0xA4, 0x0A, 0xEE, 0xFB, 0x43, 0xBA, 0x6D, 0xF6, 0x8D, 0xD8, 0x0E, 0xE9, 0xEB, 0x68, 0xBF, 0xC8,
+        0x2A, 0x56, 0x46, 0x33, 0x26, 0xAF, 0x7E, 0xF2, 0xEC, 0xE2, 0xCD, 0x14, 0xDD, 0x3D, 0x22, 0xCD,
+        0xD7, 0x49, 0x9C, 0x5C, 0x03, 0xC4, 0xC6, 0x75, 0x4A, 0x13, 0x52, 0xC9, 0x49, 0xF1, 0x39, 0xE7,
+        0xB1, 0x9E, 0x25, 0x68, 0x2B, 0xD1, 0xD6, 0x1B, 0x7B, 0x8E, 0xD2,
+    }, slices[2]);
+    // try std.testing.expectEqualSlices(u8, &[_]u8{}, slices[1]);
+    // try std.testing.expectEqualSlices(u8, &[_]u8{}, slices[2]);
 }
 
 pub fn verify(ally: std.mem.Allocator, apk_contents: []u8) !void {
@@ -737,7 +820,7 @@ pub const default_algorithm_try_order = [_]SigningEntry.Signer.Algorithm{
 /// Attempts to verify a v2 signing entry. The algorithm to use is decided by the `algorithm_try_order`. The first
 /// algorithm from the list that is present in the file is used for verification.
 ///
-/// [The following description of the algorithm is copied from the Android Source documentation.][https://source.android.com/docs/security/features/apksigning/v2#v2-verification]
+/// [The following description of the algorithm is copied from the Android Source documentation.](https://source.android.com/docs/security/features/apksigning/v2#v2-verification)
 /// 1. Locate the signing block and verify that the
 ///    a. two size fields of the APK Signing Block contain the same value
 ///    b. ZIP central directory is immediately followed by the ZIP end of central directory record
@@ -751,7 +834,7 @@ pub const default_algorithm_try_order = [_]SigningEntry.Signer.Algorithm{
 ///       is now safe to parse `signed data`.)
 ///    c. Verify that the ordered list of signature algorithm IDs in `digests` and `signatures` is identical.
 ///       (This is to prevent signature stripping/addition.)
-///    d. (Compute the digest of the APK contents)[https://source.android.com/docs/security/features/apksigning/v2#integrity-protected-contents]
+///    d. [Compute the digest of the APK contents](https://source.android.com/docs/security/features/apksigning/v2#integrity-protected-contents)
 ///       using the same digest algorithm as the digest algorithm used by the signature algorithm.
 ///    e. Verify that the computed digest is identical to the corresponding `digest` from `digests`
 ///    f. Verify that `SubjectPublicKeyInfo` of the first `certificate` of `certificates` is identical to `public key`.
@@ -764,44 +847,19 @@ pub fn verify_v2(offsets: SigningOffsets, ally: std.mem.Allocator, entry_v2: []c
     while (try iter.next()) |signer_slice| {
         signer_count += 1;
 
-        const signed_data_block = try get_length_prefixed_slice(signer_slice);
-
-        // Get public key
-        const signature_sequence = try get_length_prefixed_slice(signed_data_block.remaining orelse return error.UnexpectedEndOfStream);
-        const public_key_chunk = try get_length_prefixed_slice(signature_sequence.remaining orelse return error.UnexpectedEndOfStream);
-        const PK = struct {
-            algo: std.crypto.Certificate.Parsed.PubKeyAlgo,
-            data: Element.Slice,
-        };
-        const public_key: PK = pk: {
-            var cert = std.crypto.Certificate{
-                .buffer = public_key_chunk.slice,
-                .index = 0,
-            };
-            const pk_info = try Element.parse(public_key_chunk.slice, 0);
-            const pk_alg_elem = try Element.parse(public_key_chunk.slice, pk_info.slice.start);
-            const pk_alg_tag = try Element.parse(public_key_chunk.slice, pk_alg_elem.slice.start);
-            const alg = try std.crypto.Certificate.parseAlgorithmCategory(public_key_chunk.slice, pk_alg_tag);
-
-            const pub_key_algo: std.crypto.Certificate.Parsed.PubKeyAlgo = switch (alg) {
-                .X9_62_id_ecPublicKey => curve: {
-                    const params_elem = try Element.parse(public_key_chunk.slice, pk_alg_tag.slice.end);
-                    const named_curve = try std.crypto.Certificate.parseNamedCurve(public_key_chunk.slice, params_elem);
-                    break :curve .{ .X9_62_id_ecPublicKey = named_curve };
-                },
-                .rsaEncryption => .{ .rsaEncryption = {} },
-            };
-
-            const pub_key_elem = try Element.parse(public_key_chunk.slice, pk_alg_elem.slice.end);
-            break :pk .{
-                .algo = pub_key_algo,
-                .data = try cert.parseBitString(pub_key_elem),
-            };
-        };
+        // Slice the signer into its 3 constituent fields:
+        // 1. The signed data block
+        // 2. The signatures
+        // 3. The SubjectPublicKeyInfo of the first certificate
+        const signer = try parse_v2_signer(signer_slice);
+        const signed_data_block = signer[0];
+        const signature_sequence = signer[1];
+        const public_key_chunk = signer[2];
+        const public_key = try pem.SubjectPublicKeyInfo.parse(public_key_chunk);
 
         // A. choose strongest algorithm
         const selected_signature = signature: for (algorithm_try_order) |algorithm_try| {
-            break :signature get_signer_algorithm(signature_sequence.slice, algorithm_try) orelse continue;
+            break :signature get_signer_algorithm(signature_sequence, algorithm_try) orelse continue;
         } else {
             return error.AlgorithmNotInList;
         };
@@ -809,8 +867,8 @@ pub fn verify_v2(offsets: SigningOffsets, ally: std.mem.Allocator, entry_v2: []c
         // B. Verify signature aginst signed data
         switch (selected_signature.algorithm) {
             .sha256_RSASSA_PSS => {
-                if (public_key.algo != .rsaEncryption) return error.MismatchedPublicKey;
-                const pk_components = try std.crypto.Certificate.rsa.PublicKey.parseDer(public_key_chunk.slice[public_key.data.start..public_key.data.end]);
+                if (public_key.algorithm != .rsaEncryption) return error.MismatchedPublicKey;
+                const pk_components = try std.crypto.Certificate.rsa.PublicKey.parseDer(public_key_chunk[public_key.data.start..public_key.data.end]);
                 const pub_key = try std.crypto.Certificate.rsa.PublicKey.fromBytes(pk_components.exponent, pk_components.modulus);
 
                 const rsa = std.crypto.Certificate.rsa;
@@ -818,17 +876,17 @@ pub fn verify_v2(offsets: SigningOffsets, ally: std.mem.Allocator, entry_v2: []c
                 const modulus_len = 256;
 
                 const sig = rsa.PSSSignature.fromBytes(modulus_len, selected_signature.signature);
-                _ = try rsa.PSSSignature.verify(modulus_len, sig, signed_data_block.slice, pub_key, Sha256);
+                _ = try rsa.PSSSignature.verify(modulus_len, sig, signed_data_block, pub_key, Sha256);
             },
             .sha256_ECDSA => {
-                switch (public_key.algo.X9_62_id_ecPublicKey) {
+                switch (public_key.algorithm.X9_62_id_ecPublicKey) {
                     .secp521r1 => return error.Unsupported,
                     inline else => |named_curve| {
                         const Ecdsa = std.crypto.sign.ecdsa.Ecdsa(named_curve.Curve(), std.crypto.hash.sha2.Sha256);
-                        const pub_key = try Ecdsa.PublicKey.fromSec1(public_key_chunk.slice[public_key.data.start..public_key.data.end]);
+                        const pub_key = try Ecdsa.PublicKey.fromSec1(public_key_chunk[public_key.data.start..public_key.data.end]);
 
                         const sig = try Ecdsa.Signature.fromDer(selected_signature.signature);
-                        _ = try sig.verify(signed_data_block.slice, pub_key);
+                        _ = try sig.verify(signed_data_block, pub_key);
                     },
                 }
             },
@@ -842,10 +900,10 @@ pub fn verify_v2(offsets: SigningOffsets, ally: std.mem.Allocator, entry_v2: []c
         }
 
         // C. Verify algorithm lists are the same
-        const digest_sequence = try get_length_prefixed_slice(signed_data_block.slice);
+        const digest_sequence = try get_length_prefixed_slice(signed_data_block);
         {
             var digest_iter = try get_length_prefixed_slice_iter(digest_sequence.slice);
-            var signature_iter = try get_length_prefixed_slice_iter(signature_sequence.slice);
+            var signature_iter = try get_length_prefixed_slice_iter(signature_sequence);
             while (try digest_iter.next()) |digest_chunk| {
                 const signature = try signature_iter.next() orelse return error.MismatchedAlgorithmList;
                 const digest_algorithm_id = std.mem.readInt(u32, digest_chunk[0..4], .little);
@@ -934,7 +992,7 @@ pub fn verify_v2(offsets: SigningOffsets, ally: std.mem.Allocator, entry_v2: []c
         const x509_cert = std.crypto.Certificate{ .buffer = x509_chunk, .index = 0 };
         const x509_parsed = try x509_cert.parse();
 
-        const pub_key = public_key_chunk.slice[public_key.data.start..public_key.data.end];
+        const pub_key = public_key_chunk[public_key.data.start..public_key.data.end];
 
         if (!std.mem.eql(u8, pub_key, x509_parsed.pubKey())) return error.MismatchedCertificate;
     }
@@ -987,6 +1045,37 @@ pub fn parse(ally: std.mem.Allocator, apk_contents: []u8) ![]SigningEntry {
     return entry_list.toOwnedSlice();
 }
 
+pub fn parse_v2_signatures(ally: std.mem.Allocator, signatures_buffer: []const u8) ![]SigningEntry.Signer.Signature {
+    const sub_slice = try get_length_prefixed_slice(signatures_buffer);
+
+    var signatures = std.ArrayListUnmanaged(SigningEntry.Signer.Signature){};
+    var signature_iter = try get_length_prefixed_slice_iter(sub_slice.slice);
+    while (try signature_iter.next()) |signature| {
+        // Parse signatures
+        const signature_algorithm_id = std.mem.readInt(u32, signature[0..4], .little);
+
+        const signed_data_sig = get_length_prefixed_slice(signature[4..]) catch return error.UnexpectedEndOfStream;
+
+        try signatures.append(ally, .{
+            .algorithm = @as(SigningEntry.Signer.Algorithm, @enumFromInt(signature_algorithm_id)),
+            .signature = signed_data_sig.slice,
+        });
+    }
+    return try signatures.toOwnedSlice(ally);
+}
+
+pub fn parse_v2_signer(signer_buffer: []const u8) ![3][]const u8 {
+    // const signer = try get_length_prefixed_slice(signer_buffer);
+    const signed_data_block = try get_length_prefixed_slice(signer_buffer);
+    const signature_sequence = try get_length_prefixed_slice(signed_data_block.remaining orelse return error.UnexpectedEndOfStream);
+    const public_key_chunk = try get_length_prefixed_slice(signature_sequence.remaining orelse return error.UnexpectedEndOfStream);
+    return .{
+        signed_data_block.slice,
+        signature_sequence.slice,
+        public_key_chunk.slice,
+    };
+}
+
 /// Parses signing block into memory - not to be used for verifying APKs! Reads all of the signing block into
 /// memory to allow inspection and manipulation.
 pub fn parse_v2(alloc: std.mem.Allocator, signing_block: SigningOffsets, entry_slice: []const u8) !SigningEntry {
@@ -997,50 +1086,25 @@ pub fn parse_v2(alloc: std.mem.Allocator, signing_block: SigningOffsets, entry_s
     const signer_list_iter = try get_length_prefixed_slice(entry_slice);
 
     var iter = try get_length_prefixed_slice_iter(signer_list_iter.slice);
-    // var signer_slice_opt: ?[]const u8 = iter.slice;
     while (try iter.next()) |signer_slice| {
-        const signed_data_block = try get_length_prefixed_slice(signer_slice);
+        const signer = try parse_v2_signer(signer_slice);
+        const signed_data_block = signer[0];
 
         var signatures = std.ArrayListUnmanaged(SigningEntry.Signer.Signature){};
         errdefer signatures.deinit(alloc);
 
-        const signature_sequence = try get_length_prefixed_slice(signed_data_block.remaining orelse return error.UnexpectedEndOfStream);
-        const public_key_chunk = try get_length_prefixed_slice(signature_sequence.remaining orelse return error.UnexpectedEndOfStream);
+        const signature_sequence = signer[1];
+        const public_key_chunk = signer[2];
 
-        var certi = std.crypto.Certificate{
-            .buffer = public_key_chunk.slice,
-            .index = 0,
-        };
+        const public_key = try pem.SubjectPublicKeyInfo.parse(public_key_chunk);
 
-        const subject_pk_info = try Element.parse(public_key_chunk.slice, 0);
-        const pk_alg_elem = try Element.parse(public_key_chunk.slice, subject_pk_info.slice.start);
-        const pk_alg_tag = try Element.parse(public_key_chunk.slice, pk_alg_elem.slice.start);
-        const alg = try std.crypto.Certificate.parseAlgorithmCategory(public_key_chunk.slice, pk_alg_tag);
-
-        const pub_key_algo: std.crypto.Certificate.Parsed.PubKeyAlgo = switch (alg) {
-            .X9_62_id_ecPublicKey => curve: {
-                const params_elem = try Element.parse(public_key_chunk.slice, pk_alg_tag.slice.end);
-                const named_curve = try std.crypto.Certificate.parseNamedCurve(public_key_chunk.slice, params_elem);
-                break :curve .{ .X9_62_id_ecPublicKey = named_curve };
-            },
-            .rsaEncryption => .{ .rsaEncryption = {} },
-        };
-        _ = pub_key_algo;
-
-        const pub_key_elem = try Element.parse(public_key_chunk.slice, pk_alg_elem.slice.end);
-        const subject_pk_bitstring = try certi.parseBitString(pub_key_elem);
-
-        var signature_iter = try get_length_prefixed_slice(signature_sequence.slice);
+        var signature_iter = try get_length_prefixed_slice(signature_sequence);
         var signature_opt: ?[]const u8 = signature_iter.slice;
         while (signature_opt) |signature| {
             // Parse signatures
             const signature_algorithm_id = std.mem.readInt(u32, signature[0..4], .little);
 
             const signed_data_sig = get_length_prefixed_slice(signature[4..]) catch return error.UnexpectedEndOfStream;
-
-            // std.debug.print("signature algorithm id {x}\n", .{signature_algorithm_id});
-
-            // std.debug.print("Signature: {}\n", .{std.fmt.fmtSliceHexUpper(signed_data_sig.slice)});
 
             try signatures.append(alloc, .{
                 .algorithm = @as(SigningEntry.Signer.Algorithm, @enumFromInt(signature_algorithm_id)),
@@ -1054,7 +1118,7 @@ pub fn parse_v2(alloc: std.mem.Allocator, signing_block: SigningOffsets, entry_s
 
         // Parse signed data
         const signed_data = signed_data: {
-            const digest_sequence = try get_length_prefixed_slice(signed_data_block.slice);
+            const digest_sequence = try get_length_prefixed_slice(signed_data_block);
 
             var digests = std.ArrayListUnmanaged(SigningEntry.Signer.SignedData.Digest){};
             errdefer digests.deinit(alloc);
@@ -1129,26 +1193,12 @@ pub fn parse_v2(alloc: std.mem.Allocator, signing_block: SigningOffsets, entry_s
             };
         };
 
-        // {
-        //     const sdpk = signed_data.certificates.items[0].pubKey();
-        //     std.debug.assert(std.mem.eql(u8, public_key_chunk.slice[subject_pk_bitstring.start..subject_pk_bitstring.end], sdpk));
-        // }
-
-        // Ensures signed data and signatures have the same list of algorithms
-        // for (signatures.items, signed_data.digests.items) |signature, digest| {
-        //     if (signature.algorithm != digest.algorithm) return error.MismatchedAlgorithms;
-        // }
-
         try signers.append(.{
             .alloc = alloc,
             .signed_data = signed_data,
             .signatures = signatures,
-            .public_key = public_key_chunk.slice[subject_pk_bitstring.start..subject_pk_bitstring.end],
+            .public_key = public_key.getBytes(),
         });
-
-        // End of loop
-        // iter = get_length_prefixed_slice(iter.remaining orelse break) catch break;
-        // signer_slice_opt = iter.slice;
     }
     return SigningEntry{ .V2 = signers };
 }
@@ -1163,10 +1213,10 @@ pub fn get_length_prefixed_slice(slice: []const u8) !SplitSlice {
     if (slice.len <= 4) return error.SliceTooSmall;
     const length = std.mem.readInt(u32, slice[0..4], .little);
     const new_slice = slice[4..];
-    if (length == slice.len) return .{ .slice = new_slice[0..length], .remaining = null };
-    if (length > slice.len) {
+    if (length > new_slice.len) {
         return error.OutOfBounds;
     }
+    if (length == new_slice.len) return .{ .slice = new_slice[0..length], .remaining = null };
     return .{ .slice = new_slice[0..length], .remaining = new_slice[length..] };
 }
 
@@ -1192,10 +1242,10 @@ pub fn get_length_prefixed_slice_iter(slice: []const u8) !SliceIter {
     if (slice.len <= 4) return error.SliceTooSmall;
     const length = std.mem.readInt(u32, slice[0..4], .little);
     const new_slice = slice[4..];
-    if (length == slice.len) return .{ .slice = new_slice[0..length], .remaining = null };
-    if (length > slice.len) {
+    if (length > new_slice.len) {
         return error.OutOfBounds;
     }
+    if (length == new_slice.len) return .{ .slice = new_slice[0..length], .remaining = null };
     return .{ .slice = new_slice[0..length], .remaining = new_slice[length..] };
 }
 

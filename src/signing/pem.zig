@@ -428,40 +428,70 @@ pub fn slice(buffer: []const u8, s: Element.Slice) []const u8 {
     return buffer[s.start..s.end];
 }
 
-pub const PublicKey = struct {
+pub const SubjectPublicKeyInfo = struct {
+    buffer: []const u8,
     algorithm: PubKeyAlgo,
-    cert: std.crypto.Certificate,
     data: Element.Slice,
 
-    const PubKeyAlgo = std.crypto.Certificate.Parsed.PubKeyAlgo;
+    pub const PubKeyAlgo = std.crypto.Certificate.Parsed.PubKeyAlgo;
 
-    pub fn parse(buffer: []const u8) PublicKey {
+    pub fn parse(buffer: []const u8) !SubjectPublicKeyInfo {
+        const pub_key_info = try Element.parse(buffer, 0);
+        std.debug.assert(pub_key_info.identifier.tag == .sequence);
+
+        const pub_key_signature_algorithm = try Element.parse(buffer, pub_key_info.slice.start);
+        std.debug.assert(pub_key_signature_algorithm.identifier.tag == .sequence);
+
+        const pub_key_algo_elem = try Element.parse(buffer, pub_key_signature_algorithm.slice.start);
+        std.debug.assert(pub_key_algo_elem.identifier.tag == .object_identifier);
+
+        const pub_key_algo_tag = try std.crypto.Certificate.parseAlgorithmCategory(buffer, pub_key_algo_elem);
+
+        const pub_key_algo: PubKeyAlgo = switch (pub_key_algo_tag) {
+            .rsaEncryption => .{ .rsaEncryption = {} },
+            .X9_62_id_ecPublicKey => curve: {
+                const params_elem = try Element.parse(buffer, pub_key_algo_elem.slice.end);
+                const named_curve = try std.crypto.Certificate.parseNamedCurve(buffer, params_elem);
+                break :curve .{ .X9_62_id_ecPublicKey = named_curve };
+            },
+        };
+
+        const pub_key_elem = try Element.parse(buffer, pub_key_signature_algorithm.slice.end);
         var cert = std.crypto.Certificate{
             .buffer = buffer,
             .index = 0,
         };
-        const pk_info = try Element.parse(buffer, 0);
-        const pk_alg_elem = try Element.parse(buffer, pk_info.slice.start);
-        const pk_alg_tag = try Element.parse(buffer, pk_alg_elem.slice.start);
-        const alg = try std.crypto.Certificate.parseAlgorithmCategory(buffer, pk_alg_tag);
-
-        const pub_key_algo: PubKeyAlgo = switch (alg) {
-            .X9_62_id_ecPublicKey => curve: {
-                const params_elem = try Element.parse(buffer, pk_alg_tag.slice.end);
-                const named_curve = try std.crypto.Certificate.parseNamedCurve(buffer, params_elem);
-                break :curve .{ .X9_62_id_ecPublicKey = named_curve };
-            },
-            .rsaEncryption => .{ .rsaEncryption = {} },
-        };
-
-        const pub_key_elem = try Element.parse(buffer, pk_alg_elem.slice.end);
+        const pub_key = try cert.parseBitString(pub_key_elem);
         return .{
             .algorithm = pub_key_algo,
-            .cert = .{
-                .buffer = buffer,
-                .data = try cert.parseBitString(pub_key_elem),
-                .index = 0,
-            },
+            .buffer = buffer[0..pub_key.end],
+            .data = pub_key,
         };
     }
+
+    pub fn fromCertificate(cert: std.crypto.Certificate.Parsed) !SubjectPublicKeyInfo {
+        const bytes_to_parse = cert.certificate.buffer[cert.subject_slice.end..];
+        var spki = try parse(bytes_to_parse);
+        spki.buffer = spki.buffer[0..spki.data.end];
+        return spki;
+    }
+
+    pub fn getBytes(spki: SubjectPublicKeyInfo) []const u8 {
+        return spki.buffer[spki.data.start..spki.data.end];
+    }
+
+    test fromCertificate {
+        const ally = std.testing.allocator;
+        const cert_bytes = try decodeCertificateAlloc(.Certificate, ally, test_file.PEM) orelse unreachable;
+        defer ally.free(cert_bytes);
+
+        const unparsed_cert = std.crypto.Certificate{ .buffer = cert_bytes, .index = 0 };
+        const cert = try unparsed_cert.parse();
+
+        const spki = try fromCertificate(cert);
+        try std.testing.expectEqual(SubjectPublicKeyInfo.PubKeyAlgo.X9_62_id_ecPublicKey, spki.algorithm);
+        try std.testing.expectEqualSlices(u8, cert.pubKey(), spki.getBytes());
+    }
 };
+
+const test_file = @import("test.zig");
