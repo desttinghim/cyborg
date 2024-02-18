@@ -9,13 +9,9 @@ pub fn build(b: *std.Build) !void {
     const archive_mod = zig_archive.module("archive");
 
     const cyborg_module = b.addModule("cyborg", .{
-        .source_file = .{ .path = "src/main.zig" },
-        .dependencies = &.{.{
-            .name = "archive",
-            .module = archive_mod,
-        }},
+        .root_source_file = .{ .path = "src/main.zig" },
     });
-    _ = cyborg_module;
+    cyborg_module.addImport("archive", archive_mod);
 
     const main_tests = b.addTest(.{
         .root_source_file = .{ .path = "src/main.zig" },
@@ -34,7 +30,7 @@ pub fn build(b: *std.Build) !void {
         .target = target,
         .optimize = optimize,
     });
-    exe.addModule("archive", zig_archive.module("archive"));
+    exe.root_module.addImport("archive", zig_archive.module("archive"));
 
     b.installArtifact(exe);
 
