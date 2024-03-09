@@ -4,8 +4,7 @@
     .paths = .{ "" },
     .dependencies = .{
         .zig_archive = .{
-            .url = "https://github.com/desttinghim/zig-archive/archive/da8bf23619c179e7ebd5021a58cc55c2d227ef60.tar.gz",
-            .hash = "1220cc0e10490a72d96ac6a2c4918dea07aba8f8562f9ee12fea74aa9e29fb86b8e8",
+            .path = "dep/archive",
         },
     },
 }
