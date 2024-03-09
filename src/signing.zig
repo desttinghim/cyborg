@@ -474,6 +474,7 @@ fn writeSignatures(hash: Hash, buffer: []u8, signed_data: []const u8, private_ke
         // Digitally sign a string and verify it with the public key
 
         // TODO: noise
+        // TODO: encode ECDSA using ASN1 DER. Should be a SEQUENCE containing 2 INTEGERS
         std.debug.assert(signature.len == 64);
         const signature_length = signature.len + 4 + 4 + 4;
         const sig_slice = current_slice[0..signature_length];
@@ -627,6 +628,7 @@ pub const VerifyContext = struct {
     last_signed_data_block: ?SplitSlice = null,
     last_signature_sequence: ?SplitSlice = null,
     last_public_key_chunk: ?SplitSlice = null,
+    last_signature_algorithm: ?SigningEntry.Signer.Algorithm = null,
 };
 
 pub fn verify(ally: std.mem.Allocator, apk_contents: []u8, opt_verify_ctx: ?*VerifyContext) !void {
@@ -898,6 +900,10 @@ pub fn verify_v2(
         } else {
             return error.AlgorithmNotInList;
         };
+
+        if (opt_verify_ctx) |verify_ctx| {
+            verify_ctx.last_signature_algorithm = selected_signature.algorithm;
+        }
 
         // B. Verify signature aginst signed data
         switch (selected_signature.algorithm) {

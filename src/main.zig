@@ -325,6 +325,9 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
                 std.log.err("Remaining after last public key chunk: {}", .{std.fmt.fmtSliceHexUpper(remains)});
             }
         }
+        if (verify_ctx.last_signature_algorithm) |algorithm| {
+            std.log.err("Last signature algorithm: {}", .{algorithm});
+        }
         return e;
     };
 }
