@@ -291,7 +291,42 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     const apk_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, std.os.MAP.PRIVATE, file.handle, 0);
     defer std.os.munmap(apk_map);
 
-    try signing.verify(alloc, apk_map);
+    var verify_ctx: signing.VerifyContext = .{};
+
+    signing.verify(alloc, apk_map, &verify_ctx) catch |e| {
+        if (verify_ctx.signing_block) |block| {
+            std.log.err("Signing Block found: {}", .{std.fmt.fmtSliceHexUpper(block.signing_block)});
+        }
+        if (verify_ctx.signing_entry_tag) |entry_tag| {
+            std.log.err("Entry found: {}", .{entry_tag});
+        }
+        if (verify_ctx.signing_entry) |entry| {
+            std.log.err("Entry found: {}", .{std.fmt.fmtSliceHexUpper(entry)});
+        }
+        if (verify_ctx.last_signer != 0) {
+            std.log.err("Last signer: {}", .{verify_ctx.last_signer});
+        }
+        if (verify_ctx.last_signed_data_block) |block| {
+            std.log.err("Last signed data block: {}", .{std.fmt.fmtSliceHexUpper(block.slice)});
+            if (block.remaining) |remains| {
+                std.log.err("Remaining after last signed data block: {}", .{std.fmt.fmtSliceHexUpper(remains)});
+            }
+        }
+        if (verify_ctx.last_signature_sequence) |block| {
+            std.log.err("Last signature sequence: {}", .{std.fmt.fmtSliceHexUpper(block.slice)});
+            if (block.remaining) |remains| {
+                std.log.err("Remaining after last signature sequence: {}", .{std.fmt.fmtSliceHexUpper(remains)});
+            }
+        }
+        if (verify_ctx.last_public_key_chunk) |chunk| {
+            std.log.err("Last public key length: {}", .{chunk.slice.len});
+            std.log.err("Last public key chunk: {}", .{std.fmt.fmtSliceHexUpper(chunk.slice)});
+            if (chunk.remaining) |remains| {
+                std.log.err("Remaining after last public key chunk: {}", .{std.fmt.fmtSliceHexUpper(remains)});
+            }
+        }
+        return e;
+    };
 }
 
 pub fn viewSignaturesAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.File) !void {
