@@ -393,26 +393,24 @@ fn calculateSizeOfSignatures(hash: Hash, private_keys: []const pem.PrivateKeyInf
         el_size += switch (hash) {
             inline .sha256 => switch (private_key.algorithm) {
                 inline .rsaEncryption => 0, // .sha256_RSASSA_PSS,
-                inline .X9_62_id_ecPublicKey => 64, //.sha256_ECDSA,
+                inline .X9_62_id_ecPublicKey => 104, //.sha256_ECDSA,
             },
             inline .sha512 => switch (private_key.algorithm) {
                 inline .rsaEncryption => 0, // .sha512_RSASSA_PSS,
-                inline .X9_62_id_ecPublicKey => 64, // .sha512_ECDSA,
+                inline .X9_62_id_ecPublicKey => 104, // .sha512_ECDSA,
             },
         };
         size += el_size;
-
-        if (hash == .sha256 and private_key.algorithm == .X9_62_id_ecPublicKey)
-            std.debug.assert(el_size == 76);
     }
     return size;
 }
 
-fn writeSignatures(hash: Hash, buffer: []u8, signed_data: []const u8, private_keys: []const pem.PrivateKeyInfo) !void {
-    // Reserve space for the length of the signature list
-    std.mem.writeInt(u32, buffer[0..4], @intCast(buffer.len - 4), .little);
+fn writeSignatures(hash: Hash, buffer: *std.ArrayListUnmanaged(u8), signed_data: []const u8, private_keys: []const pem.PrivateKeyInfo) ![]u8 {
+    const start = buffer.items.len;
 
-    var current_slice = buffer[4..];
+    // Reserve space for the length of the signature list
+    var list_size: u32 = 0;
+    const size_buf = buffer.addManyAsSliceAssumeCapacity(4)[0..4];
 
     // Create signatures with algorithm over signed data
     for (private_keys) |private_key| {
@@ -434,6 +432,8 @@ fn writeSignatures(hash: Hash, buffer: []u8, signed_data: []const u8, private_ke
             },
         };
 
+        var signature_buffer: [128]u8 = undefined;
+
         const signature = sig: {
             switch (hash) {
                 inline .sha256 => switch (private_key.algorithm) {
@@ -448,7 +448,7 @@ fn writeSignatures(hash: Hash, buffer: []u8, signed_data: []const u8, private_ke
                             const kp = try Scheme.KeyPair.fromSecretKey(sk);
 
                             const sig = try kp.sign(signed_data, null);
-                            break :sig &sig.toBytes();
+                            break :sig sig.toDer(signature_buffer[0..Scheme.Signature.der_encoded_max_length]);
                         },
                     },
                 },
@@ -464,7 +464,7 @@ fn writeSignatures(hash: Hash, buffer: []u8, signed_data: []const u8, private_ke
                             const kp = try Scheme.KeyPair.fromSecretKey(sk);
 
                             const sig = try kp.sign(signed_data, null);
-                            break :sig &sig.toBytes();
+                            break :sig sig.toDer(signature_buffer[0..Scheme.Signature.der_encoded_max_length]);
                         },
                     },
                 },
@@ -474,11 +474,10 @@ fn writeSignatures(hash: Hash, buffer: []u8, signed_data: []const u8, private_ke
         // Digitally sign a string and verify it with the public key
 
         // TODO: noise
-        // TODO: encode ECDSA using ASN1 DER. Should be a SEQUENCE containing 2 INTEGERS
-        std.debug.assert(signature.len == 64);
         const signature_length = signature.len + 4 + 4 + 4;
-        const sig_slice = current_slice[0..signature_length];
-        current_slice = current_slice[signature_length..];
+        list_size += @intCast(signature_length);
+
+        const sig_slice = buffer.addManyAsSliceAssumeCapacity(signature_length);
 
         // Write out signature over signed data
         std.mem.writeInt(u32, sig_slice[0..][0..4], @intCast(signature_length - 4), .little);
@@ -487,11 +486,9 @@ fn writeSignatures(hash: Hash, buffer: []u8, signed_data: []const u8, private_ke
         @memcpy(sig_slice[12..][0..signature.len], signature);
     }
 
-    std.debug.assert(current_slice.len == 0);
+    std.mem.writeInt(u32, size_buf, list_size, .little);
 
-    // std.debug.assert(std.mem.readInt(u32, signer_bytes.items[signature_length_idx..][0..4], .little) == std.math.maxInt(u32));
-    // std.mem.writeInt(u32, signer_bytes.items[signature_length_idx..][0..4], @intCast(signer_bytes.items.len - signature_length_idx - 4), .little);
-    // std.debug.assert(std.mem.readInt(u32, signer_bytes.items[signature_length_idx..][0..4], .little) != std.math.maxInt(u32));
+    return buffer.items[start..];
 }
 
 test writeSignatures {
@@ -549,25 +546,14 @@ pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificat
         calculateSizeOfSignatures(context.hash, private_keys) +
         4 + spki.buffer.len;
 
-    var signer_bytes = try std.ArrayListUnmanaged(u8).initCapacity(ally, total_capacity + 8);
-
-    const list_length_prefix = signer_bytes.addManyAsSliceAssumeCapacity(4); // signer list length prefix
-    std.mem.writeInt(u32, list_length_prefix[0..4], @intCast(total_capacity + 4), .little);
-    // Reserve space for size of signer
-    const length_prefix = signer_bytes.addManyAsSliceAssumeCapacity(4); // signer length prefix
-    // Write length of signer chunk to start
-    std.mem.writeInt(u32, length_prefix[0..4], @intCast(total_capacity), .little);
+    var signer_bytes = try std.ArrayListUnmanaged(u8).initCapacity(ally, total_capacity + 128);
 
     const signed_data_chunk = signer_bytes.addManyAsSliceAssumeCapacity(size);
 
     writeSignedData(context.hash, context.final_digest, signed_data_chunk, public_certificates, private_keys);
 
-    const signatures_size = calculateSizeOfSignatures(context.hash, private_keys);
-    const signatures_slice = signer_bytes.addManyAsSliceAssumeCapacity(signatures_size);
+    const signatures_slice = try writeSignatures(context.hash, &signer_bytes, signed_data_chunk, private_keys);
 
-    try writeSignatures(context.hash, signatures_slice, signed_data_chunk, private_keys);
-
-    std.log.debug("signatures size {}", .{signatures_size});
     std.log.debug("signatures slice {}", .{std.fmt.fmtSliceHexUpper(signatures_slice)});
 
     // Append SubjectPublicKeyInfo from first x509 certificate
@@ -578,6 +564,12 @@ pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificat
     @memcpy(pk_slice[4..], spki.buffer);
 
     std.log.debug("public key slice {}", .{std.fmt.fmtSliceHexUpper(pk_slice)});
+
+    // Write length of signer chunk to start
+    const length_prefix = signer_bytes.addManyAtAssumeCapacity(0, 4);
+    std.mem.writeInt(u32, length_prefix[0..4], @intCast(signer_bytes.items.len - 4), .little);
+    const list_length_prefix = signer_bytes.addManyAtAssumeCapacity(0, 4);
+    std.mem.writeInt(u32, list_length_prefix[0..4], @intCast(signer_bytes.items.len - 4), .little);
 
     try context.v2_signers.append(ally, try signer_bytes.toOwnedSlice(ally));
 }
