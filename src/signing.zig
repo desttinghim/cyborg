@@ -552,7 +552,7 @@ pub fn sign(context: *SigningContext, ally: std.mem.Allocator, public_certificat
 
     writeSignedData(context.hash, context.final_digest, signed_data_chunk, public_certificates, private_keys);
 
-    const signatures_slice = try writeSignatures(context.hash, &signer_bytes, signed_data_chunk, private_keys);
+    const signatures_slice = try writeSignatures(context.hash, &signer_bytes, signed_data_chunk[4..], private_keys);
 
     std.log.debug("signatures slice {}", .{std.fmt.fmtSliceHexUpper(signatures_slice)});
 

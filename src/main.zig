@@ -308,14 +308,18 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
         }
         if (verify_ctx.last_signed_data_block) |block| {
             std.log.err("Last signed data block: {}", .{std.fmt.fmtSliceHexUpper(block.slice)});
-            if (block.remaining) |remains| {
-                std.log.err("Remaining after last signed data block: {}", .{std.fmt.fmtSliceHexUpper(remains)});
+            if (verify_ctx.last_signature_sequence == null) {
+                if (block.remaining) |remains| {
+                    std.log.err("Remaining after last signed data block: {}", .{std.fmt.fmtSliceHexUpper(remains)});
+                }
             }
         }
         if (verify_ctx.last_signature_sequence) |block| {
             std.log.err("Last signature sequence: {}", .{std.fmt.fmtSliceHexUpper(block.slice)});
-            if (block.remaining) |remains| {
-                std.log.err("Remaining after last signature sequence: {}", .{std.fmt.fmtSliceHexUpper(remains)});
+            if (verify_ctx.last_public_key_chunk == null) {
+                if (block.remaining) |remains| {
+                    std.log.err("Remaining after last signature sequence: {}", .{std.fmt.fmtSliceHexUpper(remains)});
+                }
             }
         }
         if (verify_ctx.last_public_key_chunk) |chunk| {
