@@ -364,6 +364,7 @@ pub const PrivateKeyInfo = struct {
                 const named_curve = try Certificate.parseNamedCurve(binary_buf, params_el);
                 break :x9_62 .{ .X9_62_id_ecPublicKey = named_curve };
             },
+            .curveEd25519 => return error.Unimplemented,
         };
 
         const private_key = try Element.parse(binary_buf, private_key_algorithm.slice.end);
@@ -454,6 +455,7 @@ pub const SubjectPublicKeyInfo = struct {
                 const named_curve = try std.crypto.Certificate.parseNamedCurve(buffer, params_elem);
                 break :curve .{ .X9_62_id_ecPublicKey = named_curve };
             },
+            .curveEd25519 => return error.Unimplemented,
         };
 
         const pub_key_elem = try Element.parse(buffer, pub_key_signature_algorithm.slice.end);

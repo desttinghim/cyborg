@@ -288,7 +288,7 @@ pub fn verifyAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: std.fs.Fi
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    const apk_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, std.os.MAP.PRIVATE, file.handle, 0);
+    const apk_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, .{ .TYPE = .PRIVATE }, file.handle, 0);
     defer std.os.munmap(apk_map);
 
     var verify_ctx: signing.VerifyContext = .{};
@@ -342,7 +342,7 @@ pub fn viewSignaturesAPK(alloc: std.mem.Allocator, args: [][]const u8, stdout: s
     const dir = try std.fs.openDirAbsolute(dirpath, .{});
     const file = try dir.openFile(filepath, .{});
 
-    const apk_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, std.os.MAP.PRIVATE, file.handle, 0);
+    const apk_map = try std.os.mmap(null, try file.getEndPos(), std.os.PROT.WRITE, .{ .TYPE = .PRIVATE }, file.handle, 0);
     defer std.os.munmap(apk_map);
 
     const signature = try signing.parse(alloc, apk_map);

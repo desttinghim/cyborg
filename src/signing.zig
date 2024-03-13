@@ -310,10 +310,12 @@ fn writeSignedData(hash: Hash, final_digest: []const u8, buffer: []u8, public_ce
             inline .sha256 => switch (private_key.algorithm) {
                 inline .rsaEncryption => .sha256_RSASSA_PSS,
                 inline .X9_62_id_ecPublicKey => .sha256_ECDSA,
+                inline .curveEd25519 => unreachable,
             },
             inline .sha512 => switch (private_key.algorithm) {
                 inline .rsaEncryption => .sha512_RSASSA_PSS,
                 inline .X9_62_id_ecPublicKey => .sha512_ECDSA,
+                inline .curveEd25519 => unreachable,
             },
         };
 
@@ -394,10 +396,12 @@ fn calculateSizeOfSignatures(hash: Hash, private_keys: []const pem.PrivateKeyInf
             inline .sha256 => switch (private_key.algorithm) {
                 inline .rsaEncryption => 0, // .sha256_RSASSA_PSS,
                 inline .X9_62_id_ecPublicKey => 104, //.sha256_ECDSA,
+                inline .curveEd25519 => unreachable,
             },
             inline .sha512 => switch (private_key.algorithm) {
                 inline .rsaEncryption => 0, // .sha512_RSASSA_PSS,
                 inline .X9_62_id_ecPublicKey => 104, // .sha512_ECDSA,
+                inline .curveEd25519 => unreachable,
             },
         };
         size += el_size;
@@ -425,10 +429,12 @@ fn writeSignatures(hash: Hash, buffer: *std.ArrayListUnmanaged(u8), signed_data:
             inline .sha256 => switch (private_key.algorithm) {
                 inline .rsaEncryption => .sha256_RSASSA_PSS,
                 inline .X9_62_id_ecPublicKey => .sha256_ECDSA,
+                inline .curveEd25519 => return error.Unimplemented,
             },
             inline .sha512 => switch (private_key.algorithm) {
                 inline .rsaEncryption => .sha512_RSASSA_PSS,
                 inline .X9_62_id_ecPublicKey => .sha512_ECDSA,
+                inline .curveEd25519 => return error.Unimplemented,
             },
         };
 
@@ -438,6 +444,7 @@ fn writeSignatures(hash: Hash, buffer: *std.ArrayListUnmanaged(u8), signed_data:
             switch (hash) {
                 inline .sha256 => switch (private_key.algorithm) {
                     inline .rsaEncryption => unreachable,
+                    inline .curveEd25519 => unreachable,
                     inline .X9_62_id_ecPublicKey => |named_curve| switch (named_curve) {
                         .secp521r1 => unreachable,
                         inline else => |curve| {
@@ -454,6 +461,7 @@ fn writeSignatures(hash: Hash, buffer: *std.ArrayListUnmanaged(u8), signed_data:
                 },
                 inline .sha512 => switch (private_key.algorithm) {
                     inline .rsaEncryption => unreachable,
+                    inline .curveEd25519 => unreachable,
                     inline .X9_62_id_ecPublicKey => |named_curve| switch (named_curve) {
                         .secp521r1 => unreachable,
                         inline else => |curve| {
